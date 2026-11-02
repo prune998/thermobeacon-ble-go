@@ -196,7 +196,10 @@ DEBUG     6      reserved     0a
 
 - `dbus-ble-sensors` must be running with *Bluetooth sensors* enabled; its gateway socket
   defaults to `127.0.0.1:18542` (loopback only), so either run this program **on the GX**
-  (Linux build, `-device <MAC>`) or rebind the socket and point `-udp-host` at it.
+  (Linux build, `-device <MAC>`) or rebind the socket and point `-udp-host` at it. A full
+  walk-through for the Cerbo GX — binary install under `/data`, autostart after boot via
+  daemontools and `/data/rc.local`, logs and updates — is in
+  [docs/venusos-cerbogx.md](docs/venusos-cerbogx.md).
 - With *Continuous scanning* off, the GX only receives about one in six broadcasts.
 - Enable the sensor once in **Settings → Integrations → Bluetooth sensors**; it appears
   as *RuuviTag* in the device list.
@@ -209,6 +212,9 @@ DEBUG     6      reserved     0a
   Victron's D-Bus (with diagrams), scanning and sensor identity, all byte formats
   (ThermoBeacon, Govee, BTHome, RuuviTag RAWv2, UDP gateway packet), sequence numbers,
   the state file, limitations
+- [Running on a Cerbo GX (Venus OS)](docs/venusos-cerbogx.md) — install the `linux-armv7`
+  binary under `/data`, start it at boot via daemontools + `/data/rc.local`, logs,
+  enabling sensors in the GUI, updating and uninstalling
 - [Development](docs/development.md) — requirements and building per platform, the test
   suite, project layout, how to add a new sensor format, debugging tools
 

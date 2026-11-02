@@ -50,7 +50,7 @@ callback of `adapter.Scan`:
 flowchart TD
     ADV["BLE advertisement<br/>(bluetooth.ScanResult)"] --> WATCH["idle watchdog:<br/>any BLE traffic resets the timer"]
     WATCH --> MATCH{"matches<br/>-device ?"}
-    MATCH -- "no" --> ONCE["debug: log the device once,<br/>stay silent afterwards"]
+    MATCH -- "no" --> SILENT["ignored silently"]
     MATCH -- "yes" --> DUMP["debug: annotated dump<br/>(hex + field breakdown)"]
 
     DUMP --> MFG
@@ -87,8 +87,7 @@ Details:
   examined. Only when no manufacturer element matched are the service data
   elements tried for BTHome.
 - **Device filter.** `-device` accepts a CoreBluetooth UUID (macOS), a MAC
-  address (Linux/Windows) or `all`. Everything else is logged once per device
-  and then ignored silently.
+  address (Linux/Windows) or `all`. Everything else is ignored silently.
 - **Idle watchdog.** Every advertisement — matching or not — resets a timer.
   If no BLE traffic at all is seen for `-idle-warning` (default 2 min), the
   bridge logs a warning; on a GX device this usually means *Bluetooth sensors*
@@ -244,6 +243,19 @@ ble_monitor handle them:
   manufacturer data element.
 - The decoder also matches frames **by local name** (`Govee_H5074_5C0F` →
   H5074), because some firmwares use unexpected company ids.
+
+Two more measures cover firmwares that send frames of yet unknown shape:
+
+- **Prefix fallback**: when the model is known from the local name but the
+  frame is longer than the canonical layout, the leading bytes are decoded
+  with the model's layout, guarded by temperature and humidity range checks.
+  This keeps measurements working when a device appends vendor data of a
+  size nobody has documented yet.
+- **Encrypted v3 frames** (company ids `0x8803`/`0x8843`, payload starting
+  with `EC 00`) are identified and labelled, but their values are not
+  decodable. Undecodable frames from a Govee-named device are logged **once
+  per device at INFO level with the raw bytes**, so new formats can be added
+  from the log alone — please report them in the issue tracker.
 
 ### BTHome v2
 

@@ -49,7 +49,26 @@ func stripIntelliRocks(data []byte) []byte {
 	return data
 }
 
-var errNotGovee = errors.New("not a Govee payload")
+var (
+	errNotGovee = errors.New("not a Govee payload")
+
+	// errGoveeEncrypted marks the newer encrypted "broadcast v3"
+	// advertisements, which carry no decodable values (yet). The company ids
+	// 0x8803/0x8843 are not real Bluetooth SIG ids: Govee puts a flags byte
+	// (0x03/0x43) right after the AD type, which BLE stacks read as the low
+	// byte of a little endian company id. The payload starts with an EC 00
+	// marker.
+	errGoveeEncrypted = errors.New("govee encrypted v3 advertisement")
+)
+
+// goveeEncryptedV3 reports whether the frame is one of the newer encrypted
+// "broadcast v3" advertisements.
+func goveeEncryptedV3(companyID uint16, data []byte) bool {
+	if companyID == 0x8803 || companyID == 0x8843 {
+		return true
+	}
+	return len(data) >= 2 && data[0] == 0xEC && data[1] == 0x00
+}
 
 // Models whose local name ("Govee_H5074", ...) identifies the payload layout.
 var goveeNameModels = []string{
@@ -117,8 +136,69 @@ func decodeGovee(mac, localName string, companyID uint16, data []byte) (*Reading
 	// otherwise the payload length does not match any known layout.
 	data = stripIntelliRocks(data)
 
+	if goveeEncryptedV3(companyID, data) {
+		return nil, fmt.Errorf("%w: company id 0x%04x, %d byte payload",
+			errGoveeEncrypted, companyID, len(data))
+	}
+
 	model := goveeModelFromName(localName)
 
+	reading, frameErr := decodeGoveeFrame(mac, model, companyID, data)
+	if frameErr == nil {
+		return reading, nil
+	}
+
+	// The frame does not match any known layout. When the model is known from
+	// the local name, retry the canonical layout on the leading bytes: some
+	// firmwares append vendor data of unexpected size after the measurement
+	// (INTELLI_ROCKS of a different size, encrypted v3 blobs, ...). The
+	// temperature/humidity range gates keep garbage from being reported.
+	if model != "" {
+		if reading, err := decodeGoveePrefix(mac, model, data); err == nil {
+			return reading, nil
+		}
+	}
+	return nil, frameErr
+}
+
+// decodeGoveePrefix decodes the canonical layout of a name-matched model from
+// the leading bytes of a longer frame.
+func decodeGoveePrefix(mac, model string, data []byte) (*Reading, error) {
+	var (
+		r   *Reading
+		err error
+	)
+	switch model {
+	case "H5074":
+		if len(data) < 7 {
+			return nil, errNotGovee
+		}
+		r, err = decodeGoveeH5074(mac, model, data[:7])
+	case "H5072", "H5075", "H5129":
+		if len(data) < 6 {
+			return nil, errNotGovee
+		}
+		r, err = goveeDecodePacked(mac, "H5072/H5075", data[:6], 1)
+	default:
+		if len(data) < 8 {
+			return nil, errNotGovee
+		}
+		r, err = goveeDecodePacked(mac, model, data[:8], 2)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// The prefix path must not report garbage: humidity is only plausible
+	// between 0 and 100 %.
+	if r.Humidity < 0 || r.Humidity > 100 {
+		return nil, fmt.Errorf("govee %s: humidity %.2f %% out of range", model, r.Humidity)
+	}
+	return r, nil
+}
+
+// decodeGoveeFrame decodes the known Govee payload layouts, selected by
+// payload length, company id and local name.
+func decodeGoveeFrame(mac, model string, companyID uint16, data []byte) (*Reading, error) {
 	switch {
 	case len(data) == 7 && (companyID == goveeCompanyIDH50xx || model == "H5074"):
 		if model != "H5074" {
@@ -139,8 +219,8 @@ func decodeGovee(mac, localName string, companyID uint16, data []byte) (*Reading
 		}
 		return goveeDecodePacked(mac, model, data, 2)
 	}
-	return nil, fmt.Errorf("%w: company id 0x%04x, %d byte payload, name %q",
-		errNotGovee, companyID, len(data), localName)
+	return nil, fmt.Errorf("%w: company id 0x%04x, %d byte payload",
+		errNotGovee, companyID, len(data))
 }
 
 // decodeGoveeH5074 handles the 7 byte H5074 layout.

@@ -124,7 +124,6 @@ Dependency notes:
 adapter.Scan                     (main.go)
   └─ Bridge.HandleScan           (bridge.go)
        ├─ acceptsDevice          (config.go)        device filter, -device
-       ├─ logForeignOnce         (bridge.go)        once-per-device debug line
        ├─ debugDumpScan          (dump.go)          annotated hex + field dump
        ├─ decodeThermoBeacon     (thermobeacon.go)  18-byte manufacturer data
        ├─ decodeGovee            (govee.go)         0xEC88 / 0x0001 layouts

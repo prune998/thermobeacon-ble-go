@@ -119,59 +119,37 @@ func TestBridgeSeqnoFromWallClock(t *testing.T) {
 	}
 }
 
-func TestLogForeignOnce(t *testing.T) {
+func TestLogUnknownGoveeOnce(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	log.SetFlags(0)
-	oldDebug := debugEnabled
-	debugEnabled = true
 	defer func() {
 		log.SetOutput(os.Stderr)
 		log.SetFlags(log.LstdFlags)
-		debugEnabled = oldDebug
 	}()
 
-	cfg := &Config{Device: "aa:bb:cc:dd:ee:ff", MinInterval: time.Second}
+	cfg := &Config{Device: "all", MinInterval: time.Second}
 	b := NewBridge(cfg, loadSeenStore(""))
 
-	// Three advertisements from the same foreign device, then one from
-	// another: only the first advertisement of each device may be logged.
-	b.logForeignOnce("11:22:33:44:55:66", -60)
-	b.logForeignOnce("11:22:33:44:55:66", -61)
-	b.logForeignOnce("11:22:33:44:55:66", -62)
-	b.logForeignOnce("22:33:44:55:66:77", -70)
+	// A Govee-named device with an undecodable frame: logged once with the
+	// raw bytes.
+	data := append([]byte{0xEC, 0x00}, make([]byte, 10)...)
+	_, govErr := decodeGovee("", "Govee_H5074", 0x8803, data)
+	b.logUnknownGoveeOnce("f1ae0297-0000-0000-0000-000000000000", "Govee_H5074", 0x8803, data, govErr)
+	b.logUnknownGoveeOnce("f1ae0297-0000-0000-0000-000000000000", "Govee_H5074", 0x8803, data, govErr)
 
 	out := buf.String()
-	if got := strings.Count(out, "does not match -device"); got != 2 {
-		t.Errorf("logged %d times, want 2 (once per device):\n%s", got, out)
+	if got := strings.Count(out, "undecodable Govee frame"); got != 1 {
+		t.Errorf("logged %d times, want 1:\n%s", got, out)
 	}
-	if !strings.Contains(out, "advertisement from 11:22:33:44:55:66 (-60 dBm) does not match -device") {
-		t.Errorf("first advertisement not logged with its rssi:\n%s", out)
+	if !strings.Contains(out, "company id 0x8803, 12 bytes: ec0000000000000000000000") {
+		t.Errorf("log line lacks the raw frame bytes:\n%s", out)
 	}
-	if !strings.Contains(out, "22:33:44:55:66:77 (-70 dBm)") {
-		t.Errorf("second device not logged:\n%s", out)
-	}
-}
 
-func TestLogForeignOnceSilentWithoutDebug(t *testing.T) {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	log.SetFlags(0)
-	oldDebug := debugEnabled
-	debugEnabled = false
-	defer func() {
-		log.SetOutput(os.Stderr)
-		log.SetFlags(log.LstdFlags)
-		debugEnabled = oldDebug
-	}()
-
-	cfg := &Config{Device: "aa:bb:cc:dd:ee:ff", MinInterval: time.Second}
-	b := NewBridge(cfg, loadSeenStore(""))
-	b.logForeignOnce("11:22:33:44:55:66", -60)
-	b.logForeignOnce("11:22:33:44:55:66", -60)
-
-	if buf.Len() != 0 {
-		t.Errorf("logged without -debug:\n%s", buf.String())
+	// Devices without a Govee model name are never reported this way.
+	b.logUnknownGoveeOnce("other-device", "", 0x1234, data, govErr)
+	if strings.Count(buf.String(), "undecodable Govee frame") != 1 {
+		t.Errorf("non-Govee device logged:\n%s", buf.String())
 	}
 }
 

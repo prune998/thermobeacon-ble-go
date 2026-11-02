@@ -1,8 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"log"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"tinygo.org/x/bluetooth"
 )
@@ -105,6 +110,51 @@ func TestDecodeGoveeH5074RealCapture(t *testing.T) {
 func TestDecodeGoveeIntelliRocksOnly(t *testing.T) {
 	if _, err := decodeGovee("", "Govee_H5074", goveeCompanyIDH50xx, goveeIntelliRocksBlob); err == nil {
 		t.Error("bare INTELLI_ROCKS blob accepted")
+	}
+}
+
+// Newer firmware broadcasts encrypted "v3" frames that carry no decodable
+// values; they must be identified instead of being reported as unknown.
+func TestDecodeGoveeEncryptedV3(t *testing.T) {
+	// company id 0x8803 (a flags byte Govee puts after the AD type), 24-byte
+	// payload with the EC 00 marker
+	data := append([]byte{0xEC, 0x00, 0x01, 0x01, 0x12, 0x34}, make([]byte, 20)...)
+	_, err := decodeGovee("", "Govee_H5074", 0x8803, data)
+	if !errors.Is(err, errGoveeEncrypted) {
+		t.Errorf("v3 frame by company id: err = %v, want errGoveeEncrypted", err)
+	}
+	// the EC 00 marker alone also identifies the frame
+	_, err = decodeGovee("", "", 0xEC88, append([]byte{0xEC, 0x00}, make([]byte, 10)...))
+	if !errors.Is(err, errGoveeEncrypted) {
+		t.Errorf("v3 frame by marker: err = %v, want errGoveeEncrypted", err)
+	}
+	// real measurement payloads never start with EC 00
+	if _, err = decodeGovee("", "Govee_H5074", goveeCompanyIDH50xx, goveeRealH5074); err != nil {
+		t.Errorf("classic frame misidentified as v3: %v", err)
+	}
+}
+
+// Frames that are longer than the canonical layout (unknown trailing vendor
+// data) still decode when the model is known from the local name.
+func TestDecodeGoveePrefixFallback(t *testing.T) {
+	junk := []byte{0x03, 0x88, 0xEC, 0x00, 0x01, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	glued := append(append([]byte(nil), goveeRealH5074...), junk...)
+	r, err := decodeGovee("", "Govee_H5074_5C0F", goveeCompanyIDH50xx, glued)
+	if err != nil {
+		t.Fatalf("prefix fallback failed: %v", err)
+	}
+	if r.Temperature != 25.52 || r.Humidity != 73.27 || r.BatteryPct != 100 {
+		t.Errorf("Reading = %.2f / %.2f / %d, want 25.52 / 73.27 / 100",
+			r.Temperature, r.Humidity, r.BatteryPct)
+	}
+}
+
+// The prefix fallback must not report garbage: a frame whose leading bytes
+// decode to an impossible humidity is rejected.
+func TestDecodeGoveePrefixRejectsGarbage(t *testing.T) {
+	data := bytes.Repeat([]byte{0xFF}, 30)
+	if _, err := decodeGovee("", "Govee_H5074", goveeCompanyIDH50xx, data); err == nil {
+		t.Error("garbage prefix accepted")
 	}
 }
 
@@ -226,7 +276,7 @@ func TestDumpScanResultTextGovee(t *testing.T) {
 			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: goveeCompanyIDH50xx, Data: goveeSampleH5074}},
 		},
 	}
-	text := dumpScanResultText(res, "")
+	text := dumpScanResultText(res, "", false)
 	for _, want := range []string{
 		"company id 0xec88, Govee company id, 7 byte payload",
 		"01 d3 08 d7 11 58 0a",
@@ -249,7 +299,7 @@ func TestDumpScanResultTextGoveePacked(t *testing.T) {
 			mfg: []bluetooth.ManufacturerDataElement{{CompanyID: goveeCompanyIDH50xx, Data: []byte{0x01, 0x03, 0x94, 0x47, 0x58, 0xAA}}},
 		},
 	}
-	text := dumpScanResultText(res, "")
+	text := dumpScanResultText(res, "", false)
 	for _, want := range []string{
 		"Govee H5072/H5075 decoded: 23.40 degC, 56.70 %, battery 88 %",
 		"temp+humid   03 94 47  -> mag 234567: 23.4 degC, 56.7 %",
@@ -271,7 +321,7 @@ func TestDumpScanResultTextGoveeIntelliRocks(t *testing.T) {
 			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: goveeCompanyIDH50xx, Data: glued}},
 		},
 	}
-	text := dumpScanResultText(res, "")
+	text := dumpScanResultText(res, "", false)
 	if !strings.Contains(text, "Govee H5074 decoded: 25.52 degC, 73.27 %, battery 100 %") {
 		t.Errorf("glued payload not decoded:\n%s", text)
 	}
@@ -288,9 +338,64 @@ func TestDumpScanResultTextGoveeIntelliRocks(t *testing.T) {
 			{CompanyID: goveeCompanyIDApple, Data: goveeIntelliRocksBlob[2:]},
 		},
 	}
-	text = dumpScanResultText(res, "")
-	if !strings.Contains(text, "Apple / INTELLI_ROCKS blob emitted by Govee firmware") {
+	text = dumpScanResultText(res, "", false)
+	if !strings.Contains(text, "carrying Govee's glued INTELLI_ROCKS blob") {
 		t.Errorf("Apple blob not labelled:\n%s", text)
+	}
+
+	// After the first explanation, repeat blobs stay out of the dump.
+	text = dumpScanResultText(res, "", true)
+	if strings.Contains(text, "INTELLI_ROCKS blob") {
+		t.Errorf("repeat Apple blob still dumped:\n%s", text)
+	}
+	if !strings.Contains(text, "Govee H5074 decoded") {
+		t.Errorf("measurement no longer decoded:\n%s", text)
+	}
+
+	// A plain Apple blob (iPhones and friends) is not INTELLI_ROCKS.
+	res.AdvertisementPayload = &fakePayload{
+		mfg: []bluetooth.ManufacturerDataElement{{CompanyID: goveeCompanyIDApple, Data: []byte{0x10, 0x05, 0x4C, 0x65}}},
+	}
+	text = dumpScanResultText(res, "", false)
+	if !strings.Contains(text, "(Apple), 4 bytes - ignored") {
+		t.Errorf("plain Apple blob mislabelled:\n%s", text)
+	}
+	if strings.Contains(text, "INTELLI_ROCKS") {
+		t.Errorf("plain Apple blob labelled as INTELLI_ROCKS:\n%s", text)
+	}
+}
+
+func TestNoteAppleBlob(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	}()
+
+	cfg := &Config{Device: "all", MinInterval: time.Second}
+	b := NewBridge(cfg, loadSeenStore(""))
+
+	if b.noteAppleBlob("f1ae0297-0000-0000-0000-000000000000", "Govee_H5074_88DE") {
+		t.Error("first sighting reported as known")
+	}
+	if !b.noteAppleBlob("f1ae0297-0000-0000-0000-000000000000", "Govee_H5074_88DE") {
+		t.Error("second sighting not reported as known")
+	}
+
+	out := buf.String()
+	if got := strings.Count(out, "INTELLI_ROCKS blob"); got != 1 {
+		t.Errorf("hint logged %d times, want 1:\n%s", got, out)
+	}
+	if !strings.Contains(out, "measurement frame arrives whenever its values change") {
+		t.Errorf("hint does not explain the cadence:\n%s", out)
+	}
+
+	// Devices without a Govee model name are never hinted.
+	b.noteAppleBlob("other-device", "")
+	if strings.Count(buf.String(), "INTELLI_ROCKS blob") != 1 {
+		t.Errorf("non-Govee device hinted:\n%s", buf.String())
 	}
 }
 
