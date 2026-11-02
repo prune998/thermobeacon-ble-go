@@ -39,6 +39,34 @@ GOOS=linux GOARCH=arm64 go build -o thermobeacon-ble-go-linux-arm64 .
 Cross compiling **to** macOS does not work (cgo); build on the Mac itself and
 copy the binary if needed.
 
+Inject the version shown by `thermobeacon-ble-go -version` and in the startup
+log:
+
+```
+go build -trimpath -ldflags "-s -w -X main.version=v0.1.0" -o thermobeacon-ble-go .
+```
+
+### Releases
+
+The release workflow (`.github/workflows/release.yml`) runs on every `v*` tag:
+
+1. runs the test suite on Ubuntu and macOS,
+2. builds `linux-amd64`, `linux-arm64` and `linux-armv7` with
+   `CGO_ENABLED=0` (statically linked — ideal for Venus OS: no libc
+   dependency; `armv7` is what a Cerbo GX runs, `arm64` an Ekrano GX),
+3. builds `darwin-arm64` and `darwin-amd64` on a macOS runner with
+   `CGO_ENABLED=1` (CoreBluetooth needs cgo; the amd64 binary is cross
+   compiled from the arm64 runner with Apple clang),
+4. creates a GitHub release from the tag with generated release notes,
+   `*.tar.gz` (linux) / `*.zip` (macOS) assets and a `SHA256SUMS.txt`.
+
+To cut a release:
+
+```
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Running the tests
 
 ```

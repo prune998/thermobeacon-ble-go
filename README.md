@@ -1,5 +1,8 @@
 # thermobeacon-ble-go
 
+[![Test](https://github.com/prune998/thermobeacon-ble-go/actions/workflows/test.yml/badge.svg)](https://github.com/prune998/thermobeacon-ble-go/actions/workflows/test.yml)
+[![Release](https://github.com/prune998/thermobeacon-ble-go/actions/workflows/release.yml/badge.svg)](https://github.com/prune998/thermobeacon-ble-go/releases)
+
 A Go port of [WookyDO/dbus-ble-temp](https://github.com/WookyDO/dbus-ble-temp): it shows
 **ThermoBeacon** Bluetooth thermometers/hygrometers (Oria, Brifit, SensorBlue and other
 clones), [BTHome v2](https://bthome.io/) devices and **Govee** thermometers (H5074 and
@@ -60,6 +63,28 @@ The program itself never talks D-Bus: it sends UDP packets, and `dbus-ble-sensor
 everything a user sees — sensor list, enable/disable, names, timeouts, alarms. The full
 internals, byte formats and the D-Bus path are documented in
 [docs/how-it-works.md](docs/how-it-works.md) (with diagrams).
+
+## Installation
+
+**Prebuilt binaries** — push a tag like `v0.1.0` and GitHub Actions builds and publishes
+a release with:
+
+| Asset | For |
+|---|---|
+| `thermobeacon-ble-go-<v>-darwin-arm64.zip` | Apple Silicon Macs |
+| `thermobeacon-ble-go-<v>-darwin-amd64.zip` | Intel Macs |
+| `thermobeacon-ble-go-<v>-linux-amd64.tar.gz` | x86-64 Linux hosts |
+| `thermobeacon-ble-go-<v>-linux-arm64.tar.gz` | Ekrano GX, Raspberry Pi 4/5, ... |
+| `thermobeacon-ble-go-<v>-linux-armv7.tar.gz` | Cerbo GX (armv7) |
+| `SHA256SUMS.txt` | checksums for all assets |
+
+Every asset contains the `thermobeacon-ble-go` binary; verify with
+`sha256sum -c SHA256SUMS.txt`. On macOS, Gatekeeper may block an unsigned
+downloaded binary — remove the quarantine flag once with
+`xattr -d com.apple.quarantine thermobeacon-ble-go` (or build from source below).
+`thermobeacon-ble-go -version` prints the release version.
+
+**From source** — see Usage below and [docs/development.md](docs/development.md).
 
 ## Usage
 

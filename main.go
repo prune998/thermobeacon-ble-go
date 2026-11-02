@@ -26,12 +26,17 @@ import (
 // range, or a MAC address when running on Linux.
 const defaultDeviceID = "10243784-1324-5413-b00c-9675981a8daa"
 
+// version is injected at build time with -ldflags "-X main.version=..." (the
+// release workflow sets it to the git tag); plain `go build` reports "dev".
+var version = "dev"
+
 func main() {
 	log.SetFlags(log.LstdFlags)
 
 	var (
 		cfg       Config
 		stateFile string
+		showVer   bool
 	)
 
 	flag.StringVar(&cfg.Device, "device", defaultDeviceID,
@@ -50,6 +55,7 @@ func main() {
 		"record of seen sensors ('' disables it); 'thermobeacon-ble-go list' prints it")
 	flag.BoolVar(&cfg.Debug, "debug", false,
 		"log every advertisement and dump its payload in a meaningful way")
+	flag.BoolVar(&showVer, "version", false, "print the version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `thermobeacon-ble-go - ThermoBeacon / BTHome -> Victron dbus-ble-sensors bridge
 
@@ -66,6 +72,11 @@ Flags:
 	flag.Parse()
 
 	debugEnabled = cfg.Debug
+
+	if showVer {
+		fmt.Println("thermobeacon-ble-go", version)
+		return
+	}
 
 	if flag.NArg() > 1 || (flag.NArg() == 1 && flag.Arg(0) != "list" && flag.Arg(0) != "dump") {
 		fmt.Fprintf(os.Stderr, "unexpected argument %q\n\n", flag.Arg(0))
@@ -127,8 +138,8 @@ func run(cfg *Config, stateFile string) error {
 	if cfg.NoForward {
 		target = "log only"
 	}
-	log.Printf("thermobeacon-ble-go: watching %s, forwarding to %s, min interval %s",
-		cfg.describeDevice(), target, cfg.MinInterval)
+	log.Printf("thermobeacon-ble-go %s: watching %s, forwarding to %s, min interval %s",
+		version, cfg.describeDevice(), target, cfg.MinInterval)
 
 	// Scan blocks until StopScan is called.
 	if err := adapter.Scan(bridge.HandleScan); err != nil {
