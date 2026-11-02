@@ -80,6 +80,11 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 	// 1. Manufacturer data formats: ThermoBeacon first (its 18 byte signature
 	//    with the embedded MAC), then Govee thermometers (H5074 and friends).
 	for _, mfg := range device.ManufacturerData() {
+		if mfg.CompanyID == goveeCompanyIDApple {
+			// Apple's company id: the INTELLI_ROCKS blob some Govee
+			// firmwares emit next to their own data - never a measurement.
+			continue
+		}
 		reading, tbErr := decodeThermoBeacon(senderMAC, mfg.CompanyID, mfg.Data)
 		if tbErr == nil {
 			b.forward(reading, device.RSSI, now)

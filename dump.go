@@ -87,6 +87,11 @@ func dumpScanResultText(device bluetooth.ScanResult, senderMAC string) string {
 	}
 
 	for _, element := range mfg {
+		if element.CompanyID == goveeCompanyIDApple {
+			fmt.Fprintf(&sb, "  manufacturer data: company id 0x%04x (Apple / INTELLI_ROCKS blob emitted by Govee firmware), %d bytes - ignored\n",
+				element.CompanyID, len(element.Data))
+			continue
+		}
 		known := ""
 		if isThermoBeaconCompanyID(element.CompanyID) {
 			known = ", known ThermoBeacon model"

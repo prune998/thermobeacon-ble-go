@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -26,6 +27,27 @@ const (
 	goveeMinTemp = -40.0
 	goveeMaxTemp = 100.0
 )
+
+// Govee firmware bug: many devices glue a 25-byte INTELLI_ROCKS vendor blob
+// (mislabeled with Apple's company id 0x004C) onto the end of their own
+// manufacturer data. Home Assistant and ble_monitor strip exactly those 25
+// bytes; without that the measurement payload length is wrong and every
+// frame is rejected.
+const (
+	goveeCompanyIDApple = 0x004C
+	intelliRocksLen     = 25
+)
+
+var intelliRocksMarker = []byte("INTELLI_ROCKS")
+
+// stripIntelliRocks removes the glued INTELLI_ROCKS blob from the end of a
+// Govee manufacturer payload, if present.
+func stripIntelliRocks(data []byte) []byte {
+	if len(data) > intelliRocksLen && bytes.Contains(data, intelliRocksMarker) {
+		return data[:len(data)-intelliRocksLen]
+	}
+	return data
+}
 
 var errNotGovee = errors.New("not a Govee payload")
 
@@ -91,6 +113,10 @@ func goveeIsH5108Family(model string) bool {
 // Govee does not report a battery voltage, so one is derived from the
 // percentage (see voltageFromBatteryPct) for the RuuviTag battery field.
 func decodeGovee(mac, localName string, companyID uint16, data []byte) (*Reading, error) {
+	// Govee firmware bug: strip the glued INTELLI_ROCKS vendor blob first,
+	// otherwise the payload length does not match any known layout.
+	data = stripIntelliRocks(data)
+
 	model := goveeModelFromName(localName)
 
 	switch {

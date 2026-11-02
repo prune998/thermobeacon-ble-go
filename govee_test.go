@@ -12,6 +12,19 @@ import (
 // trailing byte 0a.
 var goveeSampleH5074 = []byte{0x01, 0xD3, 0x08, 0xD7, 0x11, 0x58, 0x0A}
 
+// The 25-byte INTELLI_ROCKS blob some Govee firmwares glue onto the end of
+// their manufacturer data (company id 0x004C + type 0x02 + length 0x15 +
+// "INTELLI_ROCKS_HW" + padding), as handled by Home Assistant/ble_monitor.
+var goveeIntelliRocksBlob = []byte{
+	0x00, 0x4C, 0x02, 0x15,
+	'I', 'N', 'T', 'E', 'L', 'L', 'I', '_', 'R', 'O', 'C', 'K', 'S', '_', 'H', 'W',
+	0x9F, 0xF2, 0xFF, 0xC2, 0x01,
+}
+
+// Real capture from GoveeBTTempLogger (2024-08-12, Govee_H5074_5C0F):
+// ec88:00f8099f1c6402 -> 25.52 degC, 73.27 %, battery 100 %.
+var goveeRealH5074 = []byte{0x00, 0xF8, 0x09, 0x9F, 0x1C, 0x64, 0x02}
+
 func TestDecodeGoveeH5074(t *testing.T) {
 	r, err := decodeGovee("aa:bb:cc:dd:ee:ff", "Govee_H5074", goveeCompanyIDH50xx, goveeSampleH5074)
 	if err != nil {
@@ -53,8 +66,49 @@ func TestDecodeGoveeH5074NegativeTemperature(t *testing.T) {
 	}
 }
 
-func TestDecodeGoveeH5074OutOfRange(t *testing.T) {
-	// 150.00 degC is outside the -40..100 window govee-ble uses
+// The Govee firmware glues the INTELLI_ROCKS blob onto the measurement
+// payload; without stripping it, the frame is rejected as unknown.
+func TestDecodeGoveeH5074IntelliRocksGlued(t *testing.T) {
+	glued := append(append([]byte(nil), goveeRealH5074...), goveeIntelliRocksBlob...)
+	if len(glued) != 7+25 {
+		t.Fatalf("glued payload = %d bytes, want 32", len(glued))
+	}
+	r, err := decodeGovee("e0:12:1d:61:bb:aa", "Govee_H5074_5C0F", goveeCompanyIDH50xx, glued)
+	if err != nil {
+		t.Fatalf("glued payload rejected: %v", err)
+	}
+	if r.Temperature != 25.52 {
+		t.Errorf("Temperature = %v, want 25.52", r.Temperature)
+	}
+	if r.Humidity != 73.27 {
+		t.Errorf("Humidity = %v, want 73.27", r.Humidity)
+	}
+	if r.BatteryPct != 100 {
+		t.Errorf("BatteryPct = %v, want 100", r.BatteryPct)
+	}
+}
+
+// The real capture from GoveeBTTempLogger must decode with the same values it
+// reports.
+func TestDecodeGoveeH5074RealCapture(t *testing.T) {
+	r, err := decodeGovee("", "Govee_H5074_5C0F", goveeCompanyIDH50xx, goveeRealH5074)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if r.Temperature != 25.52 || r.Humidity != 73.27 || r.BatteryPct != 100 {
+		t.Errorf("Reading = %.2f degC, %.2f %%, %d %%, want 25.52 / 73.27 / 100",
+			r.Temperature, r.Humidity, r.BatteryPct)
+	}
+}
+
+// A blob without a measurement payload in front of it is not a Govee frame.
+func TestDecodeGoveeIntelliRocksOnly(t *testing.T) {
+	if _, err := decodeGovee("", "Govee_H5074", goveeCompanyIDH50xx, goveeIntelliRocksBlob); err == nil {
+		t.Error("bare INTELLI_ROCKS blob accepted")
+	}
+}
+
+func TestDecodeGoveeH5074OutOfRange(t *testing.T) { // 150.00 degC is outside the -40..100 window govee-ble uses
 	data := []byte{0x01, 0x98, 0x3A, 0xD7, 0x11, 0x58, 0x0A}
 	if _, err := decodeGovee("", "Govee_H5074", goveeCompanyIDH50xx, data); err == nil {
 		t.Error("out of range temperature accepted")
@@ -203,6 +257,40 @@ func TestDumpScanResultTextGoveePacked(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("dump does not contain %q\ngot:\n%s", want, text)
 		}
+	}
+}
+
+func TestDumpScanResultTextGoveeIntelliRocks(t *testing.T) {
+	// The glued blob must not appear as "not a payload": it is stripped and
+	// the measurement decodes.
+	glued := append(append([]byte(nil), goveeRealH5074...), goveeIntelliRocksBlob...)
+	res := bluetooth.ScanResult{
+		RSSI: -60,
+		AdvertisementPayload: &fakePayload{
+			name: "Govee_H5074_5C0F",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: goveeCompanyIDH50xx, Data: glued}},
+		},
+	}
+	text := dumpScanResultText(res, "")
+	if !strings.Contains(text, "Govee H5074 decoded: 25.52 degC, 73.27 %, battery 100 %") {
+		t.Errorf("glued payload not decoded:\n%s", text)
+	}
+	if strings.Contains(text, "not a ThermoBeacon/Govee payload") {
+		t.Errorf("glued payload still reported as unknown:\n%s", text)
+	}
+
+	// The INTELLI_ROCKS blob as its own manufacturer data element (BlueZ
+	// delivers it separately on Linux) must be labelled as ignored.
+	res.AdvertisementPayload = &fakePayload{
+		name: "Govee_H5074_5C0F",
+		mfg: []bluetooth.ManufacturerDataElement{
+			{CompanyID: goveeCompanyIDH50xx, Data: goveeRealH5074},
+			{CompanyID: goveeCompanyIDApple, Data: goveeIntelliRocksBlob[2:]},
+		},
+	}
+	text = dumpScanResultText(res, "")
+	if !strings.Contains(text, "Apple / INTELLI_ROCKS blob emitted by Govee firmware") {
+		t.Errorf("Apple blob not labelled:\n%s", text)
 	}
 }
 

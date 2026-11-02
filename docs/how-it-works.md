@@ -234,6 +234,17 @@ rejected, as in the reference parser. Govee reports the battery only as a
 percentage; a voltage of `2.5 V + 10 mV/%` (2.50–3.50 V) is derived for the
 RuuviTag battery field.
 
+Two Govee firmware quirks are handled the same way Home Assistant and
+ble_monitor handle them:
+
+- **INTELLI_ROCKS glue**: many devices append a 25-byte INTELLI_ROCKS vendor
+  blob to their own manufacturer data (a firmware bug; the blob is mislabeled
+  with Apple's company id `0x004C`). The bridge strips those 25 bytes before
+  decoding, and ignores the blob when BlueZ delivers it as a separate
+  manufacturer data element.
+- The decoder also matches frames **by local name** (`Govee_H5074_5C0F` →
+  H5074), because some firmwares use unexpected company ids.
+
 ### BTHome v2
 
 Service data with UUID `0xFCD2`, parsed with
