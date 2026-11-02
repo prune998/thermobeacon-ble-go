@@ -5,6 +5,7 @@ at boot, forwards readings to Victron's `dbus-ble-sensors`, and survives
 firmware updates.
 
 - [Prerequisites](#prerequisites)
+- [Step 0 - enable SSH and connect to the GX](#step-0---enable-ssh-and-connect-to-the-gx)
 - [Step 1 - put the binary on the GX](#step-1---put-the-binary-on-the-gx)
 - [Step 2 - find the sensor MAC addresses](#step-2---find-the-sensor-mac-addresses)
 - [Step 3 - create the service](#step-3---create-the-service)
@@ -16,8 +17,7 @@ firmware updates.
 
 Everything lives under `/data` (the only place that survives firmware
 updates) and uses the same daemontools mechanism Victron's own services and
-community drivers use. All commands run as root over SSH (see Victron's
-[Root access](https://www.victronenergy.com/live/ccgx:root_access) guide).
+community drivers use. All commands run as root over SSH (step 0).
 
 ## Prerequisites
 
@@ -39,6 +39,80 @@ community drivers use. All commands run as root over SSH (see Victron's
   OS regardless of its libc). An Ekrano GX / aarch64 system uses
   **`linux-arm64`**.
 - The MAC addresses of your sensors (step 2).
+
+## Step 0 - enable SSH and connect to the GX
+
+SSH is disabled by default on Venus OS, and there is no default root
+password. This follows Victron's official
+[Root access](https://www.victronenergy.com/live/ccgx:root_access) guide;
+work on the GX display / GX Touch, or via the Remote Console.
+
+**1. Unlock Superuser access**
+
+1. Settings → General: set *Access Level* to *User and installer* - the
+   password is `ZZZ`.
+2. Back on the General page, highlight *Access Level* (do not open it) and
+   press and hold the **right button** of the center pad until the level
+   changes to **Superuser**.
+   - GX Touch (no buttons): drag the list down and keep holding it for about
+     five seconds.
+   - Remote Console: hold the **right arrow key** on your keyboard (holding
+     the mouse button does not work).
+   - New UI: select the whole *Access & Security* group, drag down and hold
+     for five seconds.
+
+**2. Set a temporary root password**
+
+Settings → General → *Set root password* (minimum 6 characters).
+
+Note: the password lives on the rootfs and is **reset by firmware updates**.
+Use it to log in once and install an SSH key (step 4 below); keys live on
+`/data` and survive updates.
+
+**3. Enable SSH**
+
+Settings → General → *SSH on LAN* → *Enabled*.
+
+**4. Find the GX IP address**
+
+On the GX: Settings → Ethernet or Wi-Fi shows the address. Alternatively use
+your router's DHCP list or the VRM portal.
+
+**5. Connect**
+
+```sh
+ssh root@192.168.1.23     # replace with the GX's IP
+```
+
+- macOS/Linux: from a terminal. Windows 10/11 ships OpenSSH (PowerShell:
+  `ssh root@192.168.1.23`); PuTTY works as well.
+- The first connection asks to confirm the host key (`yes`), then asks for
+  the temporary root password. You are now root on the GX.
+
+**6. Recommended: install an SSH key**
+
+Keys survive firmware updates (the password does not):
+
+```sh
+# on your computer:
+ssh-copy-id root@192.168.1.23   # or append your public key to
+                                # /root/.ssh/authorized_keys on the GX
+ssh root@192.168.1.23           # should no longer ask for a password
+```
+
+Once key login works, password logins can be disabled on the GX with
+`echo 'root:*' | chpasswd -e`.
+
+**7. After firmware updates**
+
+Firmware updates reset the root password and may reset the *Access Level*;
+the SSH keys on `/data` and the enabled *SSH on LAN* switch survive. Repeat
+steps 1-2 to set a new password if key login is not set up yet.
+
+**Fallback**: if the network is unreachable, the Cerbo GX has a serial
+console (header JP201 on the CPU board, 115200 baud, GND/RX/TX) - see
+[Serial console](https://www.victronenergy.com/live/ccgx:root_access#connecting_on_the_serial_console)
+in Victron's guide.
 
 ## Step 1 - put the binary on the GX
 
@@ -149,6 +223,10 @@ EOF
 cat /data/rc.local
 ```
 
+> The `/data/rc.local` mechanism requires Settings → General →
+> *Modification checks* → *Modifications enabled* to stay on - see the notes
+> at the bottom of this guide.
+
 Reboot to prove it comes up on its own:
 
 ```sh
@@ -224,3 +302,11 @@ Sensors stay in Victron's Bluetooth sensors list until they time out
   link is recreated by `/data/rc.local` at every boot. After a major
   firmware update, re-check that the service is up (`svstat`) and that
   `bluetoothctl list` still works.
+- **Root password vs SSH keys**: firmware updates reset the root password
+  (it lives on the rootfs) while SSH keys on `/data` survive - install a key
+  in step 0.6 so you are never locked out after an update.
+- **Keep Modifications enabled**: Settings → General → *Modification checks*
+  → *Modifications enabled* must stay on. When it is off, Venus OS renames
+  `/data/rc.local` to `/data/rc.local.disabled` at every boot and the
+  autostart link is never recreated - the app simply stops starting after a
+  reboot.
