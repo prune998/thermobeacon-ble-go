@@ -50,7 +50,7 @@ callback of `adapter.Scan`:
 flowchart TD
     ADV["BLE advertisement<br/>(bluetooth.ScanResult)"] --> WATCH["idle watchdog:<br/>any BLE traffic resets the timer"]
     WATCH --> MATCH{"matches<br/>-device ?"}
-    MATCH -- "no" --> ONCE["debug: log the device once,<br/>stay silent afterwards"]
+    MATCH -- "no" --> SILENT["ignored silently"]
     MATCH -- "yes" --> DUMP["debug: annotated dump<br/>(hex + field breakdown)"]
 
     DUMP --> MFG
@@ -87,8 +87,7 @@ Details:
   examined. Only when no manufacturer element matched are the service data
   elements tried for BTHome.
 - **Device filter.** `-device` accepts a CoreBluetooth UUID (macOS), a MAC
-  address (Linux/Windows) or `all`. Everything else is logged once per device
-  and then ignored silently.
+  address (Linux/Windows) or `all`. Everything else is ignored silently.
 - **Idle watchdog.** Every advertisement — matching or not — resets a timer.
   If no BLE traffic at all is seen for `-idle-warning` (default 2 min), the
   bridge logs a warning; on a GX device this usually means *Bluetooth sensors*

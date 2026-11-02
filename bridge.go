@@ -30,7 +30,6 @@ type Bridge struct {
 	mu            sync.Mutex
 	lastSent      map[string]time.Time
 	known         map[string]bool
-	foreignLogged map[string]bool // devices already logged as not matching -device
 	unknownLogged map[string]bool // devices already logged with an undecodable Govee frame
 	appleLogged   map[string]bool // devices already told about the INTELLI_ROCKS blob
 	lastAdv       time.Time
@@ -44,7 +43,6 @@ func NewBridge(cfg *Config, store *SeenStore) *Bridge {
 		sender:        newUDPSender(cfg.UDPHost, cfg.UDPPort),
 		lastSent:      map[string]time.Time{},
 		known:         map[string]bool{},
-		foreignLogged: map[string]bool{},
 		unknownLogged: map[string]bool{},
 		appleLogged:   map[string]bool{},
 		lastAdv:       time.Now(),
@@ -66,7 +64,6 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 
 	addr := device.Address.String()
 	if !b.cfg.acceptsDevice(addr) {
-		b.logForeignOnce(addr, device.RSSI)
 		return
 	}
 
@@ -145,23 +142,6 @@ func identityFor(senderMAC, addr string) string {
 		return senderMAC
 	}
 	return pseudoMAC(addr)
-}
-
-// logForeignOnce logs the first advertisement of a device that does not match
-// -device, once per device: busy radio environments (phones, TVs, neighbour
-// sensors) would otherwise flood the debug output with every advertisement.
-func (b *Bridge) logForeignOnce(addr string, rssi int16) {
-	if !debugEnabled {
-		return
-	}
-	b.mu.Lock()
-	first := !b.foreignLogged[addr]
-	b.foreignLogged[addr] = true
-	b.mu.Unlock()
-	if first {
-		debugf("advertisement from %s (%d dBm) does not match -device (further advertisements from it are not logged)",
-			addr, rssi)
-	}
 }
 
 // forward rate limits, re-encodes and sends one reading.
