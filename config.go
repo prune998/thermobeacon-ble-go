@@ -16,6 +16,7 @@ type Config struct {
 	UDPHost     string
 	UDPPort     int
 	NoForward   bool
+	CLI         bool
 	MinInterval time.Duration
 	IdleWarning time.Duration
 	Debug       bool

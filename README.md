@@ -118,12 +118,37 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 | `-device` | `10243784-...-9675981a8daa` | UUID (macOS), MAC (Linux) or `all` |
 | `-udp-host` / `-udp-port` | `127.0.0.1` / `18542` | dbus-ble-sensors UDP gateway socket |
 | `-no-forward` | off | decode and log only, never send UDP packets |
+| `-cli` | off | interactive TUI: browse devices, get MAC addresses, explore payloads (no forwarding) |
 | `-min-interval` | `5s` | at most one forwarded packet per sensor every N seconds |
 | `-idle-warning` | `2m` | warn when no BLE advertisement at all was seen for N seconds |
 | `-state` | `sensors.json` | seen-sensor record (`''` disables; read by `list`) |
 | `-debug` | off | log every advertisement and dump its payload in a meaningful way |
 
-## Debugging
+### Interactive CLI (`--cli`)
+
+`./thermobeacon-ble-go --cli` opens a terminal UI (built with
+[Charm Bubble Tea](https://github.com/charmbracelet/bubbletea)) that lists every
+Bluetooth device in range as it is discovered — address, name, RSSI, company
+ids and decoded readings (ThermoBeacon / Govee / BTHome). Navigate with the
+arrow keys, press **enter** to explore the last advertisement of the selected
+device (identity incl. MAC address, full hex dump and field breakdown), **esc**
+to go back, **q** to quit. Nothing is forwarded in this mode.
+
+```
+ thermb   ─ bluetooth devices
+ Address                                  Name                  RSSI   Company    Reading              Seen
+ ─────────────────────────────────────────────────────────────────────────────────────────────────────
+ f1ae0297-b710-1440-2881-9274ad58590d     Govee_H5074_88DE      -35    0x004c     -                    0s
+ db:5c:8d:a0:0f:21                        Oria                  -52    0x0010     19.2°C 58.0% 2.88V   3s
+ 3 devices, 1 with decoded readings, scanning
+ ↑/↓ navigate • enter: explore payload • esc: back • q: quit • devices appear as their advertisement data changes
+```
+
+macOS coalesces identical advertisements, so devices appear when their
+advertisement data changes — a device with static content shows up once; Govee
+sensors surface their measurement frame whenever the values change.
+
+### Debugging
 
 With `-debug` (or the `dump` subcommand) every advertisement of a followed device is
 logged with a hex dump and a field-by-field breakdown — raw AD structures when the

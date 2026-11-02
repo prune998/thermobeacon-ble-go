@@ -114,6 +114,7 @@ The test suite needs no Bluetooth hardware. It covers, among others:
 |---|---|
 | `main.go` | flags, subcommands (`list`, `dump`), scan lifecycle, signal handling |
 | `config.go` | runtime options, device filter, `debugf` |
+| `cli.go` | `--cli` interactive TUI (Bubble Tea): device browser, payload explorer |
 | `sensor.go` | `Reading` type, MAC helpers, pseudo MAC, voltage derivation |
 | `thermobeacon.go` | ThermoBeacon decoder (port of the original Python decoder) |
 | `govee.go` | Govee decoder (H5074, H5072/H5075, H51xx family) |

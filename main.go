@@ -55,6 +55,8 @@ func main() {
 		"record of seen sensors ('' disables it); 'thermobeacon-ble-go list' prints it")
 	flag.BoolVar(&cfg.Debug, "debug", false,
 		"log every advertisement and dump its payload in a meaningful way")
+	flag.BoolVar(&cfg.CLI, "cli", false,
+		"interactive TUI: browse discovered devices, get their MAC addresses and explore the payloads (no forwarding)")
 	flag.BoolVar(&showVer, "version", false, "print the version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `thermobeacon-ble-go - ThermoBeacon / BTHome -> Victron dbus-ble-sensors bridge
@@ -82,6 +84,12 @@ Flags:
 		fmt.Fprintf(os.Stderr, "unexpected argument %q\n\n", flag.Arg(0))
 		flag.Usage()
 		os.Exit(2)
+	}
+	if cfg.CLI {
+		if err := runCLI(&cfg); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 	if flag.Arg(0) == "dump" {
 		// Discovery mode: decode and dump everything, forward nothing. The
