@@ -1,0 +1,11 @@
+# binary
+thermobeacon-ble-go
+dist/
+
+# runtime state
+sensors.json
+*.tmp
+
+# go
+*.test
+*.out
