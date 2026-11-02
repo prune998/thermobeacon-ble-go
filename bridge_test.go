@@ -175,6 +175,40 @@ func TestLogForeignOnceSilentWithoutDebug(t *testing.T) {
 	}
 }
 
+func TestLogUnknownGoveeOnce(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(os.Stderr)
+		log.SetFlags(log.LstdFlags)
+	}()
+
+	cfg := &Config{Device: "all", MinInterval: time.Second}
+	b := NewBridge(cfg, loadSeenStore(""))
+
+	// A Govee-named device with an undecodable frame: logged once with the
+	// raw bytes.
+	data := append([]byte{0xEC, 0x00}, make([]byte, 10)...)
+	_, govErr := decodeGovee("", "Govee_H5074", 0x8803, data)
+	b.logUnknownGoveeOnce("f1ae0297-0000-0000-0000-000000000000", "Govee_H5074", 0x8803, data, govErr)
+	b.logUnknownGoveeOnce("f1ae0297-0000-0000-0000-000000000000", "Govee_H5074", 0x8803, data, govErr)
+
+	out := buf.String()
+	if got := strings.Count(out, "undecodable Govee frame"); got != 1 {
+		t.Errorf("logged %d times, want 1:\n%s", got, out)
+	}
+	if !strings.Contains(out, "company id 0x8803, 12 bytes: ec0000000000000000000000") {
+		t.Errorf("log line lacks the raw frame bytes:\n%s", out)
+	}
+
+	// Devices without a Govee model name are never reported this way.
+	b.logUnknownGoveeOnce("other-device", "", 0x1234, data, govErr)
+	if strings.Count(buf.String(), "undecodable Govee frame") != 1 {
+		t.Errorf("non-Govee device logged:\n%s", buf.String())
+	}
+}
+
 func TestAcceptsDevice(t *testing.T) {
 	cases := []struct {
 		device string

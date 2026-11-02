@@ -31,6 +31,7 @@ type Bridge struct {
 	lastSent      map[string]time.Time
 	known         map[string]bool
 	foreignLogged map[string]bool // devices already logged as not matching -device
+	unknownLogged map[string]bool // devices already logged with an undecodable Govee frame
 	lastAdv       time.Time
 	idleWarned    bool
 }
@@ -43,6 +44,7 @@ func NewBridge(cfg *Config, store *SeenStore) *Bridge {
 		lastSent:      map[string]time.Time{},
 		known:         map[string]bool{},
 		foreignLogged: map[string]bool{},
+		unknownLogged: map[string]bool{},
 		lastAdv:       time.Now(),
 	}
 }
@@ -95,6 +97,10 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 			b.forward(reading, device.RSSI, now)
 			return
 		}
+		// A Govee-named device whose frame cannot be decoded is logged once
+		// at INFO level with the raw bytes, so unknown frame formats can be
+		// identified (and supported) from the log alone.
+		b.logUnknownGoveeOnce(addr, device.LocalName(), mfg.CompanyID, mfg.Data, govErr)
 		debugf("%s manufacturer data 0x%04x (%d bytes): %v; %v",
 			addr, mfg.CompanyID, len(mfg.Data), tbErr, govErr)
 	}
@@ -193,6 +199,24 @@ func (b *Bridge) forward(r *Reading, rssi int16, now time.Time) {
 
 	if b.store != nil {
 		b.store.Update(r, rssi, now)
+	}
+}
+
+// logUnknownGoveeOnce reports undecodable manufacturer data from a device
+// whose local name matches a known Govee model - once per device, at INFO
+// level, with the raw bytes, so unknown frame formats can be identified and
+// supported from the log alone.
+func (b *Bridge) logUnknownGoveeOnce(addr, localName string, companyID uint16, data []byte, decodeErr error) {
+	if goveeModelFromName(localName) == "" {
+		return
+	}
+	b.mu.Lock()
+	first := !b.unknownLogged[addr]
+	b.unknownLogged[addr] = true
+	b.mu.Unlock()
+	if first {
+		log.Printf("%s sent an undecodable Govee frame: company id 0x%04x, %d bytes: %x (%v) - please report this at https://github.com/prune998/thermobeacon-ble-go/issues",
+			localName, companyID, len(data), data, decodeErr)
 	}
 }
 

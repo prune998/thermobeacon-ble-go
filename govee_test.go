@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -105,6 +107,51 @@ func TestDecodeGoveeH5074RealCapture(t *testing.T) {
 func TestDecodeGoveeIntelliRocksOnly(t *testing.T) {
 	if _, err := decodeGovee("", "Govee_H5074", goveeCompanyIDH50xx, goveeIntelliRocksBlob); err == nil {
 		t.Error("bare INTELLI_ROCKS blob accepted")
+	}
+}
+
+// Newer firmware broadcasts encrypted "v3" frames that carry no decodable
+// values; they must be identified instead of being reported as unknown.
+func TestDecodeGoveeEncryptedV3(t *testing.T) {
+	// company id 0x8803 (a flags byte Govee puts after the AD type), 24-byte
+	// payload with the EC 00 marker
+	data := append([]byte{0xEC, 0x00, 0x01, 0x01, 0x12, 0x34}, make([]byte, 20)...)
+	_, err := decodeGovee("", "Govee_H5074", 0x8803, data)
+	if !errors.Is(err, errGoveeEncrypted) {
+		t.Errorf("v3 frame by company id: err = %v, want errGoveeEncrypted", err)
+	}
+	// the EC 00 marker alone also identifies the frame
+	_, err = decodeGovee("", "", 0xEC88, append([]byte{0xEC, 0x00}, make([]byte, 10)...))
+	if !errors.Is(err, errGoveeEncrypted) {
+		t.Errorf("v3 frame by marker: err = %v, want errGoveeEncrypted", err)
+	}
+	// real measurement payloads never start with EC 00
+	if _, err = decodeGovee("", "Govee_H5074", goveeCompanyIDH50xx, goveeRealH5074); err != nil {
+		t.Errorf("classic frame misidentified as v3: %v", err)
+	}
+}
+
+// Frames that are longer than the canonical layout (unknown trailing vendor
+// data) still decode when the model is known from the local name.
+func TestDecodeGoveePrefixFallback(t *testing.T) {
+	junk := []byte{0x03, 0x88, 0xEC, 0x00, 0x01, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	glued := append(append([]byte(nil), goveeRealH5074...), junk...)
+	r, err := decodeGovee("", "Govee_H5074_5C0F", goveeCompanyIDH50xx, glued)
+	if err != nil {
+		t.Fatalf("prefix fallback failed: %v", err)
+	}
+	if r.Temperature != 25.52 || r.Humidity != 73.27 || r.BatteryPct != 100 {
+		t.Errorf("Reading = %.2f / %.2f / %d, want 25.52 / 73.27 / 100",
+			r.Temperature, r.Humidity, r.BatteryPct)
+	}
+}
+
+// The prefix fallback must not report garbage: a frame whose leading bytes
+// decode to an impossible humidity is rejected.
+func TestDecodeGoveePrefixRejectsGarbage(t *testing.T) {
+	data := bytes.Repeat([]byte{0xFF}, 30)
+	if _, err := decodeGovee("", "Govee_H5074", goveeCompanyIDH50xx, data); err == nil {
+		t.Error("garbage prefix accepted")
 	}
 }
 

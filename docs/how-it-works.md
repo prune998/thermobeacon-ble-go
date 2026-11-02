@@ -245,6 +245,19 @@ ble_monitor handle them:
 - The decoder also matches frames **by local name** (`Govee_H5074_5C0F` →
   H5074), because some firmwares use unexpected company ids.
 
+Two more measures cover firmwares that send frames of yet unknown shape:
+
+- **Prefix fallback**: when the model is known from the local name but the
+  frame is longer than the canonical layout, the leading bytes are decoded
+  with the model's layout, guarded by temperature and humidity range checks.
+  This keeps measurements working when a device appends vendor data of a
+  size nobody has documented yet.
+- **Encrypted v3 frames** (company ids `0x8803`/`0x8843`, payload starting
+  with `EC 00`) are identified and labelled, but their values are not
+  decodable. Undecodable frames from a Govee-named device are logged **once
+  per device at INFO level with the raw bytes**, so new formats can be added
+  from the log alone — please report them in the issue tracker.
+
 ### BTHome v2
 
 Service data with UUID `0xFCD2`, parsed with

@@ -92,6 +92,13 @@ func dumpScanResultText(device bluetooth.ScanResult, senderMAC string) string {
 				element.CompanyID, len(element.Data))
 			continue
 		}
+		if goveeEncryptedV3(element.CompanyID, element.Data) {
+			fmt.Fprintf(&sb, "  manufacturer data: company id 0x%04x, %d byte payload:\n",
+				element.CompanyID, len(element.Data))
+			writeHexDump(&sb, element.Data, "    ")
+			fmt.Fprintf(&sb, "    Govee encrypted v3 advertisement - values are not decodable, no readings forwarded\n")
+			continue
+		}
 		known := ""
 		if isThermoBeaconCompanyID(element.CompanyID) {
 			known = ", known ThermoBeacon model"
