@@ -40,31 +40,47 @@ Cross compiling **to** macOS does not work (cgo); build on the Mac itself and
 copy the binary if needed.
 
 Inject the version shown by `thermobeacon-ble-go -version` and in the startup
-log:
+log (GoReleaser does this from the git tag; `go build` alone reports "dev"):
 
 ```
-go build -trimpath -ldflags "-s -w -X main.version=v0.1.0" -o thermobeacon-ble-go .
+go build -trimpath -ldflags "-X main.version=v0.1.2" -o thermobeacon-ble-go .
 ```
 
 ### Releases
 
-The release workflow (`.github/workflows/release.yml`) runs on every `v*` tag:
+Releases are built with [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`,
+using its `go` builder). The release workflow (`.github/workflows/release.yml`)
+runs on every `v*` tag:
 
 1. runs the test suite on Ubuntu and macOS,
-2. builds `linux-amd64`, `linux-arm64` and `linux-armv7` with
+2. validates the GoReleaser config (`goreleaser check`),
+3. builds `linux-amd64`, `linux-arm64` and `linux-armv7` with
    `CGO_ENABLED=0` (statically linked — ideal for Venus OS: no libc
-   dependency; `armv7` is what a Cerbo GX runs, `arm64` an Ekrano GX),
-3. builds `darwin-arm64` and `darwin-amd64` on a macOS runner with
-   `CGO_ENABLED=1` (CoreBluetooth needs cgo; the amd64 binary is cross
-   compiled from the arm64 runner with Apple clang),
-4. creates a GitHub release from the tag with generated release notes,
-   `*.tar.gz` (linux) / `*.zip` (macOS) assets and a `SHA256SUMS.txt`.
+   dependency; `armv7` is what a Cerbo GX runs, `arm64` an Ekrano GX), and
+   `darwin-arm64`/`darwin-amd64` with `CGO_ENABLED=1` (CoreBluetooth needs
+   cgo; the amd64 binary is cross compiled from the arm64 runner with Apple
+   clang) — all on a single macOS runner,
+4. creates a GitHub release from the tag with GitHub-generated release
+   notes, `thermobeacon-ble-go-<tag>-<os>-<arch>.tar.gz` (linux) / `.zip`
+   (macOS) archives and a `SHA256SUMS.txt`.
 
 To cut a release:
 
 ```
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.2
+git push origin v0.1.2
+```
+
+The actions are kept current (actions/checkout v7, actions/setup-go v7,
+goreleaser-action v7, GoReleaser `latest`); pin the GoReleaser version in
+`release.yml` (e.g. `version: v2.19.0` instead of `latest`) if a future
+GoReleaser major ever breaks the config.
+
+To try a release build locally without publishing anything:
+
+```
+goreleaser check                    # validate .goreleaser.yaml
+goreleaser release --snapshot --clean   # builds all 5 targets into dist/
 ```
 
 ## Running the tests

@@ -1,0 +1,74 @@
+# GoReleaser configuration (https://goreleaser.com).
+#
+# Builds five targets:
+#   - darwin/amd64 + darwin/arm64 with CGO (CoreBluetooth via tinygo/cbgo);
+#     the amd64 binary is cross compiled from the arm64 runner with Apple clang
+#   - linux/amd64, linux/arm64, linux/arm (v7, what a Cerbo GX runs) with
+#     CGO disabled - statically linked, ideal for Venus OS
+#
+# Assets keep the historical names:
+#   thermobeacon-ble-go-<tag>-<os>-<arch>.tar.gz (linux) / .zip (macOS)
+# plus SHA256SUMS.txt, attached to a GitHub release with generated notes.
+
+version: 2
+
+project_name: thermobeacon-ble-go
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: linux
+    builder: go
+    binary: thermobeacon-ble-go
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Tag }}
+
+  - id: darwin
+    builder: go
+    binary: thermobeacon-ble-go
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Tag }}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}-{{ .Tag }}-{{ .Os }}-{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    format_overrides:
+      - goos: darwin
+        formats:
+          - zip
+
+checksum:
+  name_template: "SHA256SUMS.txt"
+
+changelog:
+  use: github
+
+release:
+  # The GitHub release is created with GitHub's generated release notes,
+  # attached to the pushed tag.
+  mode: replace

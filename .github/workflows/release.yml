@@ -1,14 +1,15 @@
 name: Release
 
-# Builds and publishes a GitHub release when a version tag (v*) is pushed.
+# Builds and publishes a GitHub release when a version tag (v*) is pushed,
+# using GoReleaser (see .goreleaser.yaml):
 #
-#   darwin/amd64 + darwin/arm64  built on macOS (CoreBluetooth needs cgo; the
-#                               amd64 binary is cross compiled with Apple clang)
-#   linux/amd64, linux/arm64,   built with CGO_ENABLED=0 (BlueZ path is pure Go)
-#   linux/armv7                 armv7 is what a Cerbo GX runs; arm64 is Ekrano GX
+#   darwin/amd64 + darwin/arm64 with CGO (CoreBluetooth; the amd64 binary is
+#   cross compiled from the arm64 runner with Apple clang)
+#   linux/amd64, linux/arm64, linux/arm (v7, what a Cerbo GX runs) with
+#   CGO disabled - statically linked
 #
-# Assets: tar.gz (linux) / zip (macOS) plus a SHA256SUMS.txt, attached to a
-# release created from the tag with generated release notes.
+# Assets: tar.gz (linux) / zip (macOS) plus SHA256SUMS.txt, attached to a
+# GitHub release with generated notes.
 
 on:
   push:
@@ -28,10 +29,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -53,115 +54,38 @@ jobs:
       - name: Test
         run: go test -count=1 ./...
 
-  build-linux:
-    name: build ${{ matrix.artifact }}
-    needs: test
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - artifact: linux-amd64
-            goarch: amd64
-          - artifact: linux-arm64
-            goarch: arm64
-          - artifact: linux-armv7
-            goarch: arm
-            goarm: "7"
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build
-        env:
-          CGO_ENABLED: "0"
-          GOOS: linux
-          GOARCH: ${{ matrix.goarch }}
-          GOARM: ${{ matrix.goarm }}
-        run: |
-          mkdir -p dist
-          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o dist/thermobeacon-ble-go .
-          tar -czf "dist/thermobeacon-ble-go-${GITHUB_REF_NAME}-${{ matrix.artifact }}.tar.gz" \
-            -C dist thermobeacon-ble-go
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.artifact }}
-          path: dist/*.tar.gz
-          if-no-files-found: error
-
-  build-macos:
-    name: build ${{ matrix.artifact }}
-    needs: test
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - artifact: darwin-arm64
-            goarch: arm64
-          - artifact: darwin-amd64
-            goarch: amd64
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build
-        env:
-          CGO_ENABLED: "1"
-          GOOS: darwin
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          export SDKROOT="$(xcrun --show-sdk-path)"
-          mkdir -p dist
-          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o dist/thermobeacon-ble-go .
-          ( cd dist && zip -q "thermobeacon-ble-go-${GITHUB_REF_NAME}-${{ matrix.artifact }}.zip" thermobeacon-ble-go )
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.artifact }}
-          path: dist/*.zip
-          if-no-files-found: error
-
   release:
-    name: create release
-    needs: [test, build-linux, build-macos]
-    runs-on: ubuntu-latest
+    name: goreleaser
+    needs: test
+    # macOS runner: the darwin builds need cgo (CoreBluetooth); the linux
+    # targets cross compile from here with CGO disabled.
+    runs-on: macos-latest
     permissions:
       contents: write
     steps:
-      - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+      - name: Check out the repository
+        uses: actions/checkout@v7
         with:
-          pattern: release-*
-          merge-multiple: true
-          path: dist
+          # GoReleaser wants the full history and tags for changelogs.
+          fetch-depth: 0
 
-      - name: Create checksums
-        run: |
-          cd dist
-          sha256sum * > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+      - name: Set up Go
+        uses: actions/setup-go@v7
         with:
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/SHA256SUMS.txt
-          generate_release_notes: true
+          go-version-file: go.mod
+
+      - name: Validate GoReleaser configuration
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: check
+
+      - name: Build and publish the release
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
