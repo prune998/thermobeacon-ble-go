@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -30,12 +31,13 @@ var adTypeNames = map[byte]string{
 // debugDumpScan logs an annotated dump of one advertisement: the raw AD
 // structures (when the platform exposes the raw packet), the manufacturer
 // data with a ThermoBeacon field breakdown, and the service data with a
-// BTHome TLV breakdown. No-op unless -debug is set.
-func debugDumpScan(device bluetooth.ScanResult, senderMAC string) {
+// BTHome TLV breakdown. No-op unless -debug is set. appleKnown suppresses
+// repeat INTELLI_ROCKS lines for devices whose blob was already explained.
+func debugDumpScan(device bluetooth.ScanResult, senderMAC string, appleKnown bool) {
 	if !debugEnabled {
 		return
 	}
-	text := dumpScanResultText(device, senderMAC)
+	text := dumpScanResultText(device, senderMAC, appleKnown)
 	for _, line := range strings.Split(text, "\n") {
 		log.Print("DEBUG " + line)
 	}
@@ -57,7 +59,7 @@ func debugDumpRuuvi(payload []byte) {
 }
 
 // dumpScanResultText renders the annotated dump of one advertisement.
-func dumpScanResultText(device bluetooth.ScanResult, senderMAC string) string {
+func dumpScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnown bool) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "advertisement %s rssi %d dBm", device.Address.String(), device.RSSI)
@@ -88,8 +90,16 @@ func dumpScanResultText(device bluetooth.ScanResult, senderMAC string) string {
 
 	for _, element := range mfg {
 		if element.CompanyID == goveeCompanyIDApple {
-			fmt.Fprintf(&sb, "  manufacturer data: company id 0x%04x (Apple / INTELLI_ROCKS blob emitted by Govee firmware), %d bytes - ignored\n",
-				element.CompanyID, len(element.Data))
+			if appleKnown {
+				continue
+			}
+			if bytes.Contains(element.Data, intelliRocksMarker) {
+				fmt.Fprintf(&sb, "  manufacturer data: company id 0x%04x (Apple company id, carrying Govee's glued INTELLI_ROCKS blob), %d bytes - ignored (the measurement frame arrives on other broadcasts)\n",
+					element.CompanyID, len(element.Data))
+			} else {
+				fmt.Fprintf(&sb, "  manufacturer data: company id 0x%04x (Apple), %d bytes - ignored\n",
+					element.CompanyID, len(element.Data))
+			}
 			continue
 		}
 		if goveeEncryptedV3(element.CompanyID, element.Data) {

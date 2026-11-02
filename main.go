@@ -99,7 +99,7 @@ Flags:
 		}
 		debugEnabled = true
 	}
-	if flag.NArg() == 1 {
+	if flag.NArg() == 1 && flag.Arg(0) == "list" {
 		if err := listSensors(stateFile); err != nil {
 			log.Fatalf("list sensors: %v", err)
 		}

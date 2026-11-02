@@ -33,7 +33,7 @@ func TestDumpScanResultText(t *testing.T) {
 			svc:  []bluetooth.ServiceDataElement{{UUID: bthome.ServiceUUID, Data: sampleBTHome}},
 		},
 	}
-	text := dumpScanResultText(res, "db:5c:8d:a0:0f:21")
+	text := dumpScanResultText(res, "db:5c:8d:a0:0f:21", false)
 
 	for _, want := range []string{
 		"rssi -52 dBm",
@@ -69,7 +69,7 @@ func TestDumpScanResultTextRejectsForeignPayload(t *testing.T) {
 			mfg: []bluetooth.ManufacturerDataElement{{CompanyID: 0x0010, Data: sampleThermoBeacon}},
 		},
 	}
-	text := dumpScanResultText(res, "aa:bb:cc:dd:ee:ff")
+	text := dumpScanResultText(res, "aa:bb:cc:dd:ee:ff", false)
 	if !strings.Contains(text, "not a ThermoBeacon/Govee payload") {
 		t.Errorf("dump does not explain rejection:\n%s", text)
 	}
@@ -83,7 +83,7 @@ func TestDumpScanResultTextRejectsForeignPayload(t *testing.T) {
 
 func TestDumpScanResultTextEmpty(t *testing.T) {
 	res := bluetooth.ScanResult{RSSI: -80, AdvertisementPayload: &fakePayload{name: "empty"}}
-	text := dumpScanResultText(res, "")
+	text := dumpScanResultText(res, "", false)
 	if !strings.Contains(text, "no manufacturer or service data") {
 		t.Errorf("dump does not mention missing data:\n%s", text)
 	}
@@ -188,6 +188,6 @@ func TestDebugDumpScanNoopWithoutDebug(t *testing.T) {
 	debugEnabled = false
 	defer func() { debugEnabled = old }()
 
-	debugDumpScan(bluetooth.ScanResult{AdvertisementPayload: &fakePayload{}}, "")
+	debugDumpScan(bluetooth.ScanResult{AdvertisementPayload: &fakePayload{}}, "", false)
 	debugDumpRuuvi(make([]byte, ruuviPayloadLen))
 }

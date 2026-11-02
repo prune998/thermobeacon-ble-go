@@ -32,6 +32,7 @@ type Bridge struct {
 	known         map[string]bool
 	foreignLogged map[string]bool // devices already logged as not matching -device
 	unknownLogged map[string]bool // devices already logged with an undecodable Govee frame
+	appleLogged   map[string]bool // devices already told about the INTELLI_ROCKS blob
 	lastAdv       time.Time
 	idleWarned    bool
 }
@@ -45,6 +46,7 @@ func NewBridge(cfg *Config, store *SeenStore) *Bridge {
 		known:         map[string]bool{},
 		foreignLogged: map[string]bool{},
 		unknownLogged: map[string]bool{},
+		appleLogged:   map[string]bool{},
 		lastAdv:       time.Now(),
 	}
 }
@@ -75,9 +77,20 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 		}
 	}
 
+	// Govee devices fill most broadcasts with the INTELLI_ROCKS blob; the
+	// measurement frame only arrives when its values change. Explain that
+	// once per device, and keep the dump quiet about repeat blobs.
+	appleKnown := false
+	for _, mfg := range device.ManufacturerData() {
+		if mfg.CompanyID == goveeCompanyIDApple {
+			appleKnown = b.noteAppleBlob(addr, device.LocalName())
+			break
+		}
+	}
+
 	// Annotated dump of the whole advertisement: hex plus a field-by-field
 	// breakdown of ThermoBeacon and BTHome payloads (no-op without -debug).
-	debugDumpScan(device, senderMAC)
+	debugDumpScan(device, senderMAC, appleKnown)
 
 	// 1. Manufacturer data formats: ThermoBeacon first (its 18 byte signature
 	//    with the embedded MAC), then Govee thermometers (H5074 and friends).
@@ -200,6 +213,21 @@ func (b *Bridge) forward(r *Reading, rssi int16, now time.Time) {
 	if b.store != nil {
 		b.store.Update(r, rssi, now)
 	}
+}
+
+// noteAppleBlob marks a device whose advertisement carries the INTELLI_ROCKS
+// blob and returns whether it was seen before. The first time, it explains at
+// INFO level why most broadcasts are ignored and when readings arrive.
+func (b *Bridge) noteAppleBlob(addr, localName string) bool {
+	b.mu.Lock()
+	seenBefore := b.appleLogged[addr]
+	b.appleLogged[addr] = true
+	b.mu.Unlock()
+	if !seenBefore && goveeModelFromName(localName) != "" {
+		log.Printf("%s: most broadcasts carry the INTELLI_ROCKS blob (company id 0x004c) instead of measurements; the measurement frame arrives whenever its values change - readings are forwarded then",
+			localName)
+	}
+	return seenBefore
 }
 
 // logUnknownGoveeOnce reports undecodable manufacturer data from a device
