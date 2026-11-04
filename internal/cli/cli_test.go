@@ -1,16 +1,22 @@
 package cli
 
 import (
+	"os"
 	"regexp"
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/prune998/thermobeacon-ble-go/internal/capture"
 	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
 	"tinygo.org/x/bluetooth"
 )
 
 // ansiRe strips terminal styling from rendered strings in assertions.
 var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// addrFixture is the CoreBluetooth UUID of the test Govee sensor.
+const addrFixture = "f1ae0297-b710-1440-2881-9274ad58590d"
 
 // Test fixtures (duplicated per package; see internal/decoders tests).
 
@@ -63,7 +69,7 @@ func TestCLIReadingSummary(t *testing.T) {
 	// Govee real capture: battery percentage instead of voltage.
 	res.AdvertisementPayload = &fakePayload{
 		name: "Govee_H5074_88DE",
-		mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: decoders.GoveeCompanyID, Data: goveeRealH5074}},
+		mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
 	}
 	summary, readingMAC = cliReading(res, "ba:e2:52:36:ff:28")
 	if summary != "25.5°C 73.3% 100%" {
@@ -98,7 +104,7 @@ func TestCLIUpdateDevice(t *testing.T) {
 		RSSI: -50,
 		AdvertisementPayload: &fakePayload{
 			name: "Govee_H5074_88DE",
-			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: decoders.GoveeCompanyID, Data: goveeRealH5074}},
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
 		},
 	}
 	addr := "f1ae0297-b710-1440-2881-9274ad58590d"
@@ -155,7 +161,7 @@ func TestCLICompaniesAndDetail(t *testing.T) {
 		RSSI: -50,
 		AdvertisementPayload: &fakePayload{
 			name: "Govee_H5074_88DE",
-			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: decoders.GoveeCompanyID, Data: goveeRealH5074}},
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
 		},
 	}
 	m.upsertDevice("f1ae0297-b710-1440-2881-9274ad58590d", res)
@@ -174,5 +180,67 @@ func TestCLICompaniesAndDetail(t *testing.T) {
 		if !strings.Contains(detail, want) {
 			t.Errorf("detail missing %q\ngot:\n%s", want, detail)
 		}
+	}
+}
+
+func TestCaptureToggle(t *testing.T) {
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWd)
+
+	m := newCLIModel(nil)
+	res := bluetooth.ScanResult{
+		RSSI: -50,
+		AdvertisementPayload: &fakePayload{
+			name: "Govee_H5074_88DE",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
+		},
+	}
+	m.upsertDevice(addrFixture, res)
+	m.refreshRows()
+
+	// press "c": capture starts for the selected device
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if m.captureWriter == nil {
+		t.Fatal("capture did not start")
+	}
+	if m.captureAddr != addrFixture {
+		t.Errorf("captureAddr = %q, want %q", m.captureAddr, addrFixture)
+	}
+	if m.capturePath != "capture-f1ae0297-b710-1440-2881-9274ad58590d.jsonl" {
+		t.Errorf("capturePath = %q", m.capturePath)
+	}
+
+	// a matching advertisement is captured
+	res.RSSI = -44
+	m.captureAdvertisement(addrFixture, res)
+	if m.captureCount != 1 {
+		t.Errorf("captureCount = %d, want 1", m.captureCount)
+	}
+
+	capturePath := m.capturePath
+
+	// press "c" again: capture stops, file keeps the events
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if m.captureWriter != nil {
+		t.Error("capture still active after toggle off")
+	}
+	if _, err := os.Stat(capturePath); err != nil {
+		t.Errorf("capture file missing: %v", err)
+	}
+
+	// the captured file contains the raw frame and replays through the
+	// decoders
+	events, err := capture.Read(capturePath)
+	if err != nil {
+		t.Fatalf("read capture: %v", err)
+	}
+	if len(events) != 1 || len(events[0].ManufacturerData) != 1 {
+		t.Fatalf("captured events = %+v", events)
+	}
+	if r := capture.Decode(events[0]); r == nil || r.Temperature != 25.52 {
+		t.Errorf("captured event not decodable: %+v", r)
 	}
 }

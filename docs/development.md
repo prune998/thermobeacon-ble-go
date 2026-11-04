@@ -162,28 +162,40 @@ carries more data.
 
 ## Adding a new sensor format
 
-1. **Decoder** — new file `yourformat.go` with
-   `decodeYourFormat(mac string, companyID uint16, data []byte) (*Reading, error)`.
+1. **Capture real frames** — `./thermobeacon-ble-go --cli` (select the device,
+   press `c`) or `./thermobeacon-ble-go -device all -capture mydevice.jsonl`.
+2. **Replay** — `./thermobeacon-ble-go replay mydevice.jsonl` shows every
+   frame with its annotated dump and whether it decoded; keep the capture as
+   a test fixture.
+3. **Decoder** — new file `yourformat.go` in `internal/decoders` with
+   `YourFormat(mac string, companyID uint16, data []byte) (*sensor.Reading, error)`.
    Validate strictly (length, magic bytes, value ranges) and return a
    descriptive error — the dump shows rejection reasons to users.
-2. **Wire it** — call it in `Bridge.HandleScan` at the right place in the
-   manufacturer-data / service-data chain, and in `dumpScanResultText`
-   (`dump.go`) so `-debug` shows the field breakdown.
-3. **Dump** — add a `writeYourFormatFields` breakdown in `dump.go` following
-   the existing table style (`goveeRow`).
-4. **Identity** — if the payload does not carry a MAC, let the bridge assign
-   `identityFor(senderMAC, addr)` (advertiser MAC or pseudo MAC on macOS).
-5. **Model** — set `Reading.Model` when the exact model is known; it shows up
+4. **Wire it** — call it in `Bridge.HandleScan` at the right place in the
+   manufacturer-data / service-data chain, in `capture.Decode` (replay), and
+   in `dump.ScanResultText` (`internal/dump`) so `-debug` shows the field
+   breakdown.
+5. **Dump** — add a `writeYourFormatFields` breakdown in `internal/dump`
+   following the existing table style (`goveeRow`).
+6. **Identity** — if the payload does not carry a MAC, let the bridge assign
+   `sensor.IdentityFor(senderMAC, addr)` (advertiser MAC or pseudo MAC on
+   macOS).
+7. **Model** — set `Reading.Model` when the exact model is known; it shows up
    in logs (`Govee H5074 ...`) and in `sensors.json`.
-6. **Tests** — decoder tests with real captured payloads (include a negative
+8. **Tests** — decoder tests with the captured payloads (include a negative
    temperature and a rejection case), a dump test, and if the format needs new
    RAWv2 mappings, verify against the reference implementation.
 
 ## Debugging tools
 
+- `./thermobeacon-ble-go --cli` — interactive device browser with payload
+  exploration and per-device capture (press `c`).
 - `./thermobeacon-ble-go dump` — scan everything, decode and dump each
   advertisement without forwarding. Use this to find device UUIDs/MACs and to
   inspect unknown payloads.
+- `./thermobeacon-ble-go -capture mydevice.jsonl` — record raw frames to a
+  JSON Lines file; `./thermobeacon-ble-go replay mydevice.jsonl` feeds them
+  back through the decoders and the dump.
 - `./thermobeacon-ble-go -debug` — follow the configured device with dumps of
   every advertisement and every forwarded packet.
 - Watch what would arrive at Victron's socket, without a GX:

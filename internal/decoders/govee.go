@@ -105,9 +105,11 @@ func HasIntelliRocksMarker(data []byte) bool {
 }
 
 // stripIntelliRocks removes the glued INTELLI_ROCKS blob from the end of a
-// Govee manufacturer payload, if present.
+// Govee manufacturer payload, if present. The length gate keeps a bare blob
+// (23 bytes, no measurement payload in front of it) from being stripped into
+// a negative slice.
 func stripIntelliRocks(data []byte) []byte {
-	if HasIntelliRocksMarker(data) {
+	if len(data) > intelliRocksLen && HasIntelliRocksMarker(data) {
 		return data[:len(data)-intelliRocksLen]
 	}
 	return data

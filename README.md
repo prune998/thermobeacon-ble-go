@@ -109,6 +109,7 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 |---|---|
 | *(none)* | scan and forward readings |
 | `dump` | scan and dump **every** advertisement in a meaningful way — decode + log only, no UDP; lifts the default device filter unless `-device` is given |
+| `replay <file>` | replay a capture file through the decoders and dump — the workflow for adding support for new devices |
 | `list` | print the seen-sensor table from the state file |
 
 ### Flags
@@ -119,6 +120,7 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 | `-udp-host` / `-udp-port` | `127.0.0.1` / `18542` | dbus-ble-sensors UDP gateway socket |
 | `-no-forward` | off | decode and log only, never send UDP packets |
 | `-cli` | off | interactive TUI: browse devices, get MAC addresses, explore payloads (no forwarding) |
+| `-capture <file>` | off | append every matching advertisement to a JSON Lines file (replayable) |
 | `-min-interval` | `5s` | at most one forwarded packet per sensor every N seconds |
 | `-idle-warning` | `2m` | warn when no BLE advertisement at all was seen for N seconds |
 | `-state` | `sensors.json` | seen-sensor record (`''` disables; read by `list`) |
@@ -147,6 +149,25 @@ to go back, **q** to quit. Nothing is forwarded in this mode.
 macOS coalesces identical advertisements, so devices appear when their
 advertisement data changes — a device with static content shows up once; Govee
 sensors surface their measurement frame whenever the values change.
+
+### Capturing payloads for new device support
+
+To add a decoder for a device nobody has captured yet:
+
+1. **Capture real frames** — either select the device in the TUI (`--cli`,
+   press `c` to start/stop; the file is `capture-<address>.jsonl`) or run
+   `./thermobeacon-ble-go -device all -capture mydevice.jsonl` and wait for a
+   few broadcasts.
+2. **Replay the capture** — `./thermobeacon-ble-go replay mydevice.jsonl`
+   feeds every frame through the decoders and the annotated dump, printing
+   per frame whether it decoded and, if not, the hex to implement against.
+3. **Implement the decoder** in `internal/decoders` (see
+   [docs/development.md](docs/development.md)) and use the captured bytes as
+   test fixtures.
+
+The capture format is JSON Lines: one advertisement per line with address,
+identity, name, RSSI and hex-encoded manufacturer/service data — hand-editable,
+append-friendly and diff-able.
 
 ### Debugging
 

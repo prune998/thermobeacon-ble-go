@@ -66,17 +66,24 @@ func DebugDumpRuuvi(payload []byte) {
 
 // ScanResultText renders the annotated dump of one advertisement.
 func ScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnown bool) string {
+	return AdvertisementText(device.Address.String(), device.RSSI, device, senderMAC, appleKnown)
+}
+
+// AdvertisementText renders the annotated dump for one advertisement from an
+// address, RSSI and payload - used for live scans and for replayed captures
+// alike.
+func AdvertisementText(addr string, rssi int16, payload bluetooth.AdvertisementPayload, senderMAC string, appleKnown bool) string {
 	var sb strings.Builder
 
-	fmt.Fprintf(&sb, "advertisement %s rssi %d dBm", device.Address.String(), device.RSSI)
-	if name := device.LocalName(); name != "" {
+	fmt.Fprintf(&sb, "advertisement %s rssi %d dBm", addr, rssi)
+	if name := payload.LocalName(); name != "" {
 		fmt.Fprintf(&sb, ", name %q", name)
 	}
 	sb.WriteString("\n")
 
 	// Raw advertisement bytes are only available on platforms with a raw
 	// packet payload (e.g. Linux); structured payloads return nil here.
-	if raw := device.Bytes(); len(raw) > 0 {
+	if raw := payload.Bytes(); len(raw) > 0 {
 		sb.WriteString("  raw AD structures:\n")
 		iterADStructures(raw, func(typ byte, field []byte) {
 			name, ok := adTypeNames[typ]
@@ -87,8 +94,8 @@ func ScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnown bo
 		})
 	}
 
-	mfg := device.ManufacturerData()
-	svc := device.ServiceData()
+	mfg := payload.ManufacturerData()
+	svc := payload.ServiceData()
 	if len(mfg) == 0 && len(svc) == 0 {
 		sb.WriteString("  no manufacturer or service data")
 		return strings.TrimSuffix(sb.String(), "\n")
@@ -125,7 +132,7 @@ func ScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnown bo
 			writeThermoBeaconFields(&sb, element.Data)
 			continue
 		}
-		goveeReading, govErr := decoders.Govee("", device.LocalName(), element.CompanyID, element.Data)
+		goveeReading, govErr := decoders.Govee("", payload.LocalName(), element.CompanyID, element.Data)
 		if govErr == nil {
 			fmt.Fprintf(&sb, "    Govee %s decoded: %.2f degC, %.2f %%, battery %d %%\n",
 				goveeReading.Model, goveeReading.Temperature, goveeReading.Humidity, goveeReading.BatteryPct)

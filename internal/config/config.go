@@ -26,6 +26,7 @@ type Config struct {
 	UDPPort     int
 	NoForward   bool
 	CLI         bool
+	Capture     string
 	MinInterval time.Duration
 	IdleWarning time.Duration
 	Debug       bool

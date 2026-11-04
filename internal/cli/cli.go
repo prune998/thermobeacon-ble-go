@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/prune998/thermobeacon-ble-go/internal/capture"
 	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
 	"github.com/prune998/thermobeacon-ble-go/internal/dump"
 	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
@@ -78,6 +79,12 @@ type cliModel struct {
 	table    table.Model
 	viewport viewport.Model
 	detail   bool
+
+	captureWriter *capture.Writer
+	captureAddr   string
+	capturePath   string
+	captureCount  int
+	captureErr    error
 
 	width  int
 	height int
@@ -145,6 +152,7 @@ func Run() error {
 	progDone := make(chan error, 1)
 	go func() {
 		_, err := p.Run()
+		m.closeCapture()
 		adapter.StopScan()
 		progDone <- err
 	}()
@@ -194,6 +202,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case scanMsg:
 		m.updateDevice(msg.result)
+		if m.captureWriter != nil && msg.result.Address.String() == m.captureAddr {
+			m.captureAdvertisement(msg.result.Address.String(), msg.result)
+		}
 		m.refreshRows()
 		return m, nil
 
@@ -207,6 +218,9 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.openDetail()
 			}
+			return m, nil
+		case "c":
+			m.toggleCapture()
 			return m, nil
 		case "esc":
 			m.detail = false
@@ -236,7 +250,14 @@ func (m *cliModel) View() string {
 
 	status := fmt.Sprintf("%d devices, %d with decoded readings, scanning",
 		len(m.order), m.decodedCount())
-	hint := "↑/↓ navigate • enter: explore payload • esc: back • q: quit • devices appear as their advertisement data changes"
+	if m.captureWriter != nil {
+		status += fmt.Sprintf(" • ● capturing %s → %s (%d events)",
+			m.captureAddr, m.capturePath, m.captureCount)
+	}
+	if m.captureErr != nil {
+		status += fmt.Sprintf(" • capture error: %v", m.captureErr)
+	}
+	hint := "↑/↓ navigate • enter: explore payload • c: capture device • esc: back • q: quit • devices appear as their advertisement data changes"
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		title,
@@ -244,6 +265,49 @@ func (m *cliModel) View() string {
 		cliBarStyle.Render(status),
 		cliBarStyle.Render(hint),
 	)
+}
+
+// captureAdvertisement appends one advertisement to the active capture file.
+func (m *cliModel) captureAdvertisement(addr string, d bluetooth.ScanResult) {
+	if err := m.captureWriter.Write(capture.FromScanResult(d)); err != nil {
+		m.captureErr = err
+	} else {
+		m.captureCount++
+	}
+}
+
+// toggleCapture starts or stops capturing the selected device's
+// advertisements to a JSON Lines file (capture-<address>.jsonl) for replay.
+func (m *cliModel) toggleCapture() {
+	if m.captureWriter != nil {
+		m.closeCapture()
+		return
+	}
+	dev := m.selectedDevice()
+	if dev == nil {
+		return
+	}
+	path := capture.PathFor(dev.addr)
+	w, err := capture.NewWriter(path)
+	if err != nil {
+		m.captureErr = err
+		return
+	}
+	m.captureErr = nil
+	m.captureWriter = w
+	m.captureAddr = dev.addr
+	m.capturePath = path
+	m.captureCount = 0
+}
+
+// closeCapture stops an active capture and closes its file.
+func (m *cliModel) closeCapture() {
+	if m.captureWriter != nil {
+		_ = m.captureWriter.Close()
+		m.captureWriter = nil
+		m.captureAddr = ""
+		m.capturePath = ""
+	}
 }
 
 func (m *cliModel) decodedCount() int {
