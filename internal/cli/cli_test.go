@@ -22,6 +22,14 @@ var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
 // addrFixture is the CoreBluetooth UUID of the test Govee sensor.
 const addrFixture = "f1ae0297-b710-1440-2881-9274ad58590d"
 
+// goveeIntelliRocksBlob: company id + type + length + "INTELLI_ROCKS_HW" +
+// padding - the blob Govee firmware glues onto its manufacturer data.
+var goveeIntelliRocksBlob = []byte{
+	0x00, 0x4C, 0x02, 0x15,
+	'I', 'N', 'T', 'E', 'L', 'L', 'I', '_', 'R', 'O', 'C', 'K', 'S', '_', 'H', 'W',
+	0x9F, 0xF2, 0xFF, 0xC2, 0x01,
+}
+
 // Test fixtures (duplicated per package; see internal/decoders tests).
 
 var sampleThermoBeacon = []byte{0x80, 0x00, 0x21, 0x0F, 0xA0, 0x8D, 0x5C, 0xDB, 0x40, 0x0B, 0x34, 0x01, 0xA0, 0x03, 0x0F, 0x87, 0x20, 0x00}
@@ -472,5 +480,58 @@ func TestCLIRefreshImmediateOnKey(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(m.View(), "last advertisement") {
 		t.Errorf("detail view not rendered immediately on key press; view:\n%s", ansiRe.ReplaceAllString(m.View(), ""))
+	}
+}
+
+func TestPayloadSizeText(t *testing.T) {
+	cases := []struct {
+		parts     []int
+		withTotal bool
+		want      string
+	}{
+		{nil, false, "-"},
+		{[]int{7}, false, "7 B"},
+		{[]int{7}, true, "7 B"},
+		{[]int{7, 23}, false, "7+23 B"},
+		{[]int{7, 23}, true, "7+23 B (30 B total)"},
+	}
+	for _, tc := range cases {
+		if got := payloadSizeText(tc.parts, tc.withTotal); got != tc.want {
+			t.Errorf("payloadSizeText(%v, %v) = %q, want %q", tc.parts, tc.withTotal, got, tc.want)
+		}
+	}
+}
+
+func TestCLIUpdateDevicePayloadSize(t *testing.T) {
+	m := newCLIModel(nil, time.Second)
+
+	// Govee measurement frame: single 7-byte element
+	res := bluetooth.ScanResult{
+		RSSI: -50,
+		AdvertisementPayload: &fakePayload{
+			name: "Govee_H5074_88DE",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
+		},
+	}
+	res.Address.Set(addrFixture)
+	m.upsertDevice(addrFixture, res)
+	dev := m.devices[addrFixture]
+	if dev.payloadLen() != 7 {
+		t.Errorf("payloadLen = %d, want 7", dev.payloadLen())
+	}
+
+	// next broadcast: INTELLI_ROCKS blob (23 bytes) instead of the
+	// measurement - the size follows the last advertisement
+	res.ManufacturerData()[0] = bluetooth.ManufacturerDataElement{
+		CompanyID: decoders.CompanyIDApple,
+		Data:      goveeIntelliRocksBlob[2:],
+	}
+	m.upsertDevice(addrFixture, res)
+	dev = m.devices[addrFixture]
+	if dev.payloadLen() != 23 {
+		t.Errorf("payloadLen = %d, want 23", dev.payloadLen())
+	}
+	if got := payloadSizeText(dev.payloadParts, false); got != "23 B" {
+		t.Errorf("size text = %q, want %q", got, "23 B")
 	}
 }

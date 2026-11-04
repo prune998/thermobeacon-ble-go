@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,7 @@ const (
 	cliColName
 	cliColRSSI
 	cliColCompany
+	cliColSize
 	cliColReading
 	cliColSeen
 	cliColCount
@@ -68,6 +70,7 @@ var cliCols = []cliColumn{
 	{"Name", 20},
 	{"RSSI", 5},
 	{"Company", 16},
+	{"Size", 8},
 	{"Reading", 26},
 	{"Seen", 7},
 }
@@ -111,17 +114,18 @@ type cliTickMsg time.Time
 
 // cliDevice is one discovered device, continuously updated.
 type cliDevice struct {
-	addr       string // platform address (UUID on macOS, MAC on Linux)
-	mac        string // identity: advertiser MAC or stable pseudo MAC
-	name       string
-	rssi       int16
-	companies  []uint16 // distinct company ids seen, in order
-	reading    string   // decoded summary, "" when unknown
-	readingMAC string   // sensor MAC reported by a decoded payload (ThermoBeacon)
-	firstSeen  time.Time
-	lastSeen   time.Time
-	count      int
-	last       bluetooth.ScanResult // last advertisement, for the detail view
+	addr         string // platform address (UUID on macOS, MAC on Linux)
+	mac          string // identity: advertiser MAC or stable pseudo MAC
+	name         string
+	rssi         int16
+	companies    []uint16 // distinct company ids seen, in order
+	payloadParts []int    // payload sizes of the last advertisement's elements
+	reading      string   // decoded summary, "" when unknown
+	readingMAC   string   // sensor MAC reported by a decoded payload (ThermoBeacon)
+	firstSeen    time.Time
+	lastSeen     time.Time
+	count        int
+	last         bluetooth.ScanResult // last advertisement, for the detail view
 }
 
 // cliModel implements tea.Model (pointer receivers).
@@ -468,8 +472,9 @@ func (m *cliModel) upsertDevice(addr string, d bluetooth.ScanResult) {
 	if name := d.LocalName(); name != "" {
 		dev.name = name
 	}
-
+	dev.payloadParts = nil
 	for _, mfg := range d.ManufacturerData() {
+		dev.payloadParts = append(dev.payloadParts, len(mfg.Data))
 		seen := false
 		for _, id := range dev.companies {
 			if id == mfg.CompanyID {
@@ -480,6 +485,9 @@ func (m *cliModel) upsertDevice(addr string, d bluetooth.ScanResult) {
 		if !seen {
 			dev.companies = append(dev.companies, mfg.CompanyID)
 		}
+	}
+	for _, sd := range d.ServiceData() {
+		dev.payloadParts = append(dev.payloadParts, len(sd.Data))
 	}
 
 	dev.reading, dev.readingMAC = cliReading(d, dev.mac)
@@ -545,7 +553,36 @@ func (m *cliModel) sortedOrder() []string {
 	return order
 }
 
+// payloadSizeText renders the per-element payload sizes of an advertisement:
+// "7 B" for a single element, "7+23 B" for several, optionally with the
+// total.
+func payloadSizeText(parts []int, withTotal bool) string {
+	if len(parts) == 0 {
+		return "-"
+	}
+	strs := make([]string, len(parts))
+	total := 0
+	for i, n := range parts {
+		strs[i] = strconv.Itoa(n)
+		total += n
+	}
+	text := strings.Join(strs, "+") + " B"
+	if withTotal && len(parts) > 1 {
+		text += fmt.Sprintf(" (%d B total)", total)
+	}
+	return text
+}
+
 // refreshRows rebuilds the table rows from the device list.
+// payloadLen returns the total payload size of the last advertisement.
+func (d *cliDevice) payloadLen() int {
+	total := 0
+	for _, n := range d.payloadParts {
+		total += n
+	}
+	return total
+}
+
 func (m *cliModel) refreshRows() {
 	order := m.sortedOrder()
 	rows := make([]table.Row, 0, len(order))
@@ -556,6 +593,7 @@ func (m *cliModel) refreshRows() {
 			orDash(d.name),
 			fmt.Sprintf("%d", d.rssi),
 			orDash(cliCompanies(d.companies)),
+			orDash(payloadSizeText(d.payloadParts, false)),
 			orDash(d.reading),
 			time.Since(d.lastSeen).Truncate(time.Second).String(),
 		})
@@ -592,6 +630,7 @@ func (m *cliModel) detailText(d *cliDevice) string {
 		row("Sensor MAC:", d.readingMAC+" (reported by the payload)")
 	}
 	row("Company:", orDash(cliCompanies(d.companies)))
+	row("Payload:", orDash(payloadSizeText(d.payloadParts, true)))
 	row("Reading:", orDash(d.reading))
 	row("RSSI:", fmt.Sprintf("%d dBm (last)", d.rssi))
 	row("Seen:", fmt.Sprintf("%d advertisements, first %s, last %s",

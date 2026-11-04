@@ -142,12 +142,12 @@ forwarded in this mode.
 
 ```
  thermb   ─ bluetooth devices
- Address                                  Name                  RSSI   Company    Reading              Seen
- ─────────────────────────────────────────────────────────────────────────────────────────────────────
- f1ae0297-b710-1440-2881-9274ad58590d     Govee_H5074_88DE      -35    0x004c     -                    0s
- db:5c:8d:a0:0f:21                        Oria                  -52    0x0010     19.2°C 58.0% 2.88V   3s
+ Address                                  Name                  RSSI   Company    Size      Reading              Seen
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ f1ae0297-b710-1440-2881-9274ad58590d     Govee_H5074_88DE      -35    0x004c     23 B      -                    0s
+ db:5c:8d:a0:0f:21                        Oria                  -52    0x0010     18 B      19.2°C 58.0% 2.88V   3s
  3 devices, 1 with decoded readings, scanning
- ↑/↓ navigate • enter: explore payload • esc: back • q: quit • devices appear as their advertisement data changes
+ ↑/↓ navigate • enter: explore payload • s: sort • c: capture • esc: back • q: quit • devices appear as their advertisement data changes
 ```
 
 macOS coalesces identical advertisements, so devices appear when their
