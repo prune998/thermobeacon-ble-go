@@ -1,9 +1,18 @@
-package main
+// Package decoders decodes the manufacturer/service data of the supported
+// BLE sensor formats (ThermoBeacon, Govee, BTHome) into sensor.Reading.
+//
+// All decoders take the raw payload as delivered by the BLE stack and return
+// a *sensor.Reading; they are strict — malformed payloads, out of range
+// values and frames of unknown shape are rejected with descriptive errors so
+// the payload dump can explain exactly why a frame was not decoded.
+package decoders
 
 import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 )
 
 // thermobeaconDataLen is the length of the ThermoBeacon manufacturer specific
@@ -20,9 +29,11 @@ const (
 	companyIDThermoBeacon3 = 0x0015
 )
 
-var errNotThermoBeacon = errors.New("not a ThermoBeacon payload")
+var ErrNotThermoBeacon = errors.New("not a ThermoBeacon payload")
 
-func isThermoBeaconCompanyID(id uint16) bool {
+// IsThermoBeaconCompanyID reports whether id belongs to a known ThermoBeacon
+// model.
+func IsThermoBeaconCompanyID(id uint16) bool {
 	switch id {
 	case companyIDThermoBeacon1, companyIDThermoBeacon2, companyIDThermoBeacon3:
 		return true
@@ -30,7 +41,7 @@ func isThermoBeaconCompanyID(id uint16) bool {
 	return false
 }
 
-// decodeThermoBeacon decodes the manufacturer specific data of a ThermoBeacon
+// ThermoBeacon decodes the manufacturer specific data of a ThermoBeacon
 // (Oria, Brifit, SensorBlue and other clones).
 //
 // data is the payload after the 2 byte company id (18 bytes, little endian):
@@ -43,36 +54,36 @@ func isThermoBeaconCompanyID(id uint16) bool {
 //	14-17  uptime [s]
 //
 // senderMAC is the advertiser's MAC address, empty on platforms that only
-// expose an opaque device id (macOS). When set, the embedded MAC must match it
-// in either byte order - this is the original's signature to tell ThermoBeacons
-// apart from other 18 byte manufacturer data. Without a sender MAC, companyID
-// must be one of the known ThermoBeacon ids.
+// expose an opaque device id (macOS). When set, the embedded MAC must match
+// it in either byte order - this is the original's signature to tell
+// ThermoBeacons apart from other 18 byte manufacturer data. Without a sender
+// MAC, companyID must be one of the known ThermoBeacon ids.
 //
 // ThermoBeacons also send a 22 byte min/max packet, which fails the length
 // check and is ignored, as in the original.
-func decodeThermoBeacon(senderMAC string, companyID uint16, data []byte) (*Reading, error) {
+func ThermoBeacon(senderMAC string, companyID uint16, data []byte) (*sensor.Reading, error) {
 	if len(data) != thermobeaconDataLen {
 		return nil, fmt.Errorf("%w: wrong length %d, want %d",
-			errNotThermoBeacon, len(data), thermobeaconDataLen)
+			ErrNotThermoBeacon, len(data), thermobeaconDataLen)
 	}
 
-	embeddedLSB := macFromLSBFirst(data[2:8])
+	embeddedLSB := sensor.MACFromLSBFirst(data[2:8])
 	mac := embeddedLSB
 
 	if senderMAC != "" {
-		embeddedMSB := macFromMSBFirst(data[2:8])
+		embeddedMSB := sensor.MACFromMSBFirst(data[2:8])
 		if senderMAC != embeddedLSB && senderMAC != embeddedMSB {
 			return nil, fmt.Errorf("%w: embedded MAC does not match advertiser %s",
-				errNotThermoBeacon, senderMAC)
+				ErrNotThermoBeacon, senderMAC)
 		}
 		mac = senderMAC
-	} else if !isThermoBeaconCompanyID(companyID) {
-		return nil, fmt.Errorf("%w: unknown company id 0x%04x", errNotThermoBeacon, companyID)
+	} else if !IsThermoBeaconCompanyID(companyID) {
+		return nil, fmt.Errorf("%w: unknown company id 0x%04x", ErrNotThermoBeacon, companyID)
 	}
 
 	flags := binary.LittleEndian.Uint16(data[0:2])
 
-	return &Reading{
+	return &sensor.Reading{
 		MAC:         mac,
 		Temperature: float64(int16(binary.LittleEndian.Uint16(data[10:12]))) / 16.0,
 		Humidity:    float64(binary.LittleEndian.Uint16(data[12:14])) / 16.0,

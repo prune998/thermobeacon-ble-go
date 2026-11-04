@@ -1,13 +1,47 @@
-package main
+package dump
 
 import (
 	"strings"
 	"testing"
 	"time"
 
-	bthome "github.com/hybridgroup/go-bthome"
+	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
+	"github.com/prune998/thermobeacon-ble-go/internal/logging"
+	"github.com/prune998/thermobeacon-ble-go/internal/ruuvi"
+	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 	"tinygo.org/x/bluetooth"
 )
+
+// Test fixtures (duplicated per package; see internal/decoders tests).
+
+// ThermoBeacon payload: button pressed, MAC db:5c:8d:a0:0f:21 (LSB first),
+// 2880 mV, 19.25 degC, 58 %, uptime 2131727 s.
+var sampleThermoBeacon = []byte{0x80, 0x00, 0x21, 0x0F, 0xA0, 0x8D, 0x5C, 0xDB, 0x40, 0x0B, 0x34, 0x01, 0xA0, 0x03, 0x0F, 0x87, 0x20, 0x00}
+
+// BTHome v2 payload: temperature 21.5, humidity 44.5, battery 87, battery low,
+// plus a count16 TLV that go-bthome cannot convert.
+var sampleBTHome = []byte{
+	0x40,
+	0x45, 0xD7, 0x00,
+	0x03, 0x62, 0x11,
+	0x01, 0x57,
+	0x15, 0x01,
+	0x3D, 0x05, 0x00,
+}
+
+// Real GoveeBTTempLogger H5074 capture (25.52 degC, 73.27 %, battery 100 %).
+var goveeRealH5074 = []byte{0x00, 0xF8, 0x09, 0x9F, 0x1C, 0x64, 0x02}
+
+// H5074 synthetic payload: 22.59 degC, 45.67 %, battery 88 %.
+var goveeSampleH5074 = []byte{0x01, 0xD3, 0x08, 0xD7, 0x11, 0x58, 0x0A}
+
+// The 25-byte INTELLI_ROCKS blob some Govee firmwares glue onto their
+// manufacturer data.
+var goveeIntelliRocksBlob = []byte{
+	0x00, 0x4C, 0x02, 0x15,
+	'I', 'N', 'T', 'E', 'L', 'L', 'I', '_', 'R', 'O', 'C', 'K', 'S', '_', 'H', 'W',
+	0x9F, 0xF2, 0xFF, 0xC2, 0x01,
+}
 
 // fakePayload implements bluetooth.AdvertisementPayload with structured data,
 // the way the macOS stack delivers it (Bytes() returns nil).
@@ -30,10 +64,10 @@ func TestDumpScanResultText(t *testing.T) {
 		AdvertisementPayload: &fakePayload{
 			name: "Oria",
 			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0x0010, Data: sampleThermoBeacon}},
-			svc:  []bluetooth.ServiceDataElement{{UUID: bthome.ServiceUUID, Data: sampleBTHome}},
+			svc:  []bluetooth.ServiceDataElement{{UUID: decoders.BTHomeServiceUUID, Data: sampleBTHome}},
 		},
 	}
-	text := dumpScanResultText(res, "db:5c:8d:a0:0f:21", false)
+	text := ScanResultText(res, "db:5c:8d:a0:0f:21", false)
 
 	for _, want := range []string{
 		"rssi -52 dBm",
@@ -69,7 +103,7 @@ func TestDumpScanResultTextRejectsForeignPayload(t *testing.T) {
 			mfg: []bluetooth.ManufacturerDataElement{{CompanyID: 0x0010, Data: sampleThermoBeacon}},
 		},
 	}
-	text := dumpScanResultText(res, "aa:bb:cc:dd:ee:ff", false)
+	text := ScanResultText(res, "aa:bb:cc:dd:ee:ff", false)
 	if !strings.Contains(text, "not a ThermoBeacon/Govee payload") {
 		t.Errorf("dump does not explain rejection:\n%s", text)
 	}
@@ -83,21 +117,21 @@ func TestDumpScanResultTextRejectsForeignPayload(t *testing.T) {
 
 func TestDumpScanResultTextEmpty(t *testing.T) {
 	res := bluetooth.ScanResult{RSSI: -80, AdvertisementPayload: &fakePayload{name: "empty"}}
-	text := dumpScanResultText(res, "", false)
+	text := ScanResultText(res, "", false)
 	if !strings.Contains(text, "no manufacturer or service data") {
 		t.Errorf("dump does not mention missing data:\n%s", text)
 	}
 }
 
 func TestDumpRuuvi(t *testing.T) {
-	r := &Reading{
+	r := &sensor.Reading{
 		MAC:         "db:5c:8d:a0:0f:21",
 		Temperature: 19.25,
 		Humidity:    58.0,
 		VoltageMV:   2880,
 		Uptime:      2131727,
 	}
-	payload, err := encodeRuuviRAWv2(r, 34575)
+	payload, err := ruuvi.EncodeRAWv2(r, 34575)
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -184,10 +218,10 @@ func TestHumanDuration(t *testing.T) {
 func TestDebugDumpScanNoopWithoutDebug(t *testing.T) {
 	// Must not panic and must not log anything when debug is off; with debug
 	// off the dump functions return before doing any work.
-	old := debugEnabled
-	debugEnabled = false
-	defer func() { debugEnabled = old }()
+	old := logging.DebugEnabled()
+	logging.SetDebug(false)
+	defer func() { logging.SetDebug(old) }()
 
-	debugDumpScan(bluetooth.ScanResult{AdvertisementPayload: &fakePayload{}}, "", false)
-	debugDumpRuuvi(make([]byte, ruuviPayloadLen))
+	DebugDumpScan(bluetooth.ScanResult{AdvertisementPayload: &fakePayload{}}, "", false)
+	DebugDumpRuuvi(make([]byte, ruuvi.PayloadLen))
 }

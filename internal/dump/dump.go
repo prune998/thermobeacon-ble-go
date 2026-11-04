@@ -1,7 +1,10 @@
-package main
+// Package dump renders annotated, human readable dumps of BLE
+// advertisements and of the encoded RuuviTag payloads: hex plus a
+// field-by-field breakdown of every supported format, including the reasons
+// why a decoder rejected a payload.
+package dump
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -9,6 +12,10 @@ import (
 	"time"
 
 	bthome "github.com/hybridgroup/go-bthome"
+	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
+	"github.com/prune998/thermobeacon-ble-go/internal/logging"
+	"github.com/prune998/thermobeacon-ble-go/internal/ruuvi"
+	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 	"tinygo.org/x/bluetooth"
 )
 
@@ -28,25 +35,24 @@ var adTypeNames = map[byte]string{
 	0xFF: "manufacturer data",
 }
 
-// debugDumpScan logs an annotated dump of one advertisement: the raw AD
+// DebugDumpScan logs an annotated dump of one advertisement: the raw AD
 // structures (when the platform exposes the raw packet), the manufacturer
 // data with a ThermoBeacon field breakdown, and the service data with a
-// BTHome TLV breakdown. No-op unless -debug is set. appleKnown suppresses
-// repeat INTELLI_ROCKS lines for devices whose blob was already explained.
-func debugDumpScan(device bluetooth.ScanResult, senderMAC string, appleKnown bool) {
-	if !debugEnabled {
+// BTHome TLV breakdown. No-op unless debug logging is enabled.
+func DebugDumpScan(device bluetooth.ScanResult, senderMAC string, appleKnown bool) {
+	if !logging.DebugEnabled() {
 		return
 	}
-	text := dumpScanResultText(device, senderMAC, appleKnown)
+	text := ScanResultText(device, senderMAC, appleKnown)
 	for _, line := range strings.Split(text, "\n") {
 		log.Print("DEBUG " + line)
 	}
 }
 
-// debugDumpRuuvi logs an annotated breakdown of an encoded RuuviTag RAWv2
-// payload. No-op unless -debug is set.
-func debugDumpRuuvi(payload []byte) {
-	if !debugEnabled {
+// DebugDumpRuuvi logs an annotated breakdown of an encoded RuuviTag RAWv2
+// payload. No-op unless debug logging is enabled.
+func DebugDumpRuuvi(payload []byte) {
+	if !logging.DebugEnabled() {
 		return
 	}
 	var sb strings.Builder
@@ -58,8 +64,8 @@ func debugDumpRuuvi(payload []byte) {
 	}
 }
 
-// dumpScanResultText renders the annotated dump of one advertisement.
-func dumpScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnown bool) string {
+// ScanResultText renders the annotated dump of one advertisement.
+func ScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnown bool) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "advertisement %s rssi %d dBm", device.Address.String(), device.RSSI)
@@ -89,11 +95,11 @@ func dumpScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnow
 	}
 
 	for _, element := range mfg {
-		if element.CompanyID == goveeCompanyIDApple {
+		if element.CompanyID == decoders.CompanyIDApple {
 			if appleKnown {
 				continue
 			}
-			if bytes.Contains(element.Data, intelliRocksMarker) {
+			if decoders.HasIntelliRocksMarker(element.Data) {
 				fmt.Fprintf(&sb, "  manufacturer data: company id 0x%04x (Apple company id, carrying Govee's glued INTELLI_ROCKS blob), %d bytes - ignored (the measurement frame arrives on other broadcasts)\n",
 					element.CompanyID, len(element.Data))
 			} else {
@@ -102,17 +108,10 @@ func dumpScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnow
 			}
 			continue
 		}
-		if goveeEncryptedV3(element.CompanyID, element.Data) {
-			fmt.Fprintf(&sb, "  manufacturer data: company id 0x%04x, %d byte payload:\n",
-				element.CompanyID, len(element.Data))
-			writeHexDump(&sb, element.Data, "    ")
-			fmt.Fprintf(&sb, "    Govee encrypted v3 advertisement - values are not decodable, no readings forwarded\n")
-			continue
-		}
 		known := ""
-		if isThermoBeaconCompanyID(element.CompanyID) {
+		if decoders.IsThermoBeaconCompanyID(element.CompanyID) {
 			known = ", known ThermoBeacon model"
-		} else if element.CompanyID == goveeCompanyIDH50xx || element.CompanyID == goveeCompanyIDH51xx {
+		} else if element.CompanyID == decoders.GoveeCompanyID || element.CompanyID == decoders.GoveeCompanyIDAlt {
 			known = ", Govee company id"
 		}
 		fmt.Fprintf(&sb, "  manufacturer data: company id 0x%04x%s, %d byte payload:\n",
@@ -120,13 +119,13 @@ func dumpScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnow
 		writeHexDump(&sb, element.Data, "    ")
 		// Reuse the decoders so the dump shows exactly what the bridge would
 		// accept, including why a payload is rejected.
-		tbReading, tbErr := decodeThermoBeacon(senderMAC, element.CompanyID, element.Data)
+		tbReading, tbErr := decoders.ThermoBeacon(senderMAC, element.CompanyID, element.Data)
 		if tbErr == nil {
 			fmt.Fprintf(&sb, "    ThermoBeacon decoded: %s\n", tbReading)
 			writeThermoBeaconFields(&sb, element.Data)
 			continue
 		}
-		goveeReading, govErr := decodeGovee("", device.LocalName(), element.CompanyID, element.Data)
+		goveeReading, govErr := decoders.Govee("", device.LocalName(), element.CompanyID, element.Data)
 		if govErr == nil {
 			fmt.Fprintf(&sb, "    Govee %s decoded: %.2f degC, %.2f %%, battery %d %%\n",
 				goveeReading.Model, goveeReading.Temperature, goveeReading.Humidity, goveeReading.BatteryPct)
@@ -139,7 +138,7 @@ func dumpScanResultText(device bluetooth.ScanResult, senderMAC string, appleKnow
 	for _, element := range svc {
 		fmt.Fprintf(&sb, "  service data %s, %d bytes:\n", element.UUID.String(), len(element.Data))
 		writeHexDump(&sb, element.Data, "    ")
-		if element.UUID == bthome.ServiceUUID {
+		if element.UUID == decoders.BTHomeServiceUUID {
 			writeBTHomeFields(&sb, element.Data)
 		}
 	}
@@ -156,7 +155,7 @@ func writeThermoBeaconFields(sb *strings.Builder, data []byte) {
 		button = "pressed"
 	}
 	fmt.Fprintf(sb, "    0-1    flags        0x%04x  button %s\n", flags, button)
-	fmt.Fprintf(sb, "    2-7    MAC (LSB)    %s  -> %s\n", hexSpaced(data[2:8]), macFromLSBFirst(data[2:8]))
+	fmt.Fprintf(sb, "    2-7    MAC (LSB)    %s  -> %s\n", hexSpaced(data[2:8]), sensor.MACFromLSBFirst(data[2:8]))
 	voltage := binary.LittleEndian.Uint16(data[8:10])
 	fmt.Fprintf(sb, "    8-9    battery      0x%04x  %d mV (%.3f V)\n", voltage, voltage, float64(voltage)/1000)
 	tempRaw := int16(binary.LittleEndian.Uint16(data[10:12]))
@@ -204,7 +203,7 @@ func writeBTHomeFields(sb *strings.Builder, data []byte) {
 }
 
 // bthomeValueText renders one BTHome measurement value, applying the same
-// corrections as decodeBTHome.
+// corrections as the decoder.
 func bthomeValueText(dt bthome.DataType, raw []byte) string {
 	// go-bthome scales type 0x03 by 1.0, but the BTHome format defines 0.01.
 	if dt.ID() == bthome.Humidity16.ID() && len(raw) == 2 {
@@ -227,8 +226,8 @@ func bthomeValueText(dt bthome.DataType, raw []byte) string {
 }
 
 // writeGoveeFields prints the field-by-field breakdown of a Govee payload.
-// The layout is selected by payload length, matching the branches of
-// decodeGovee.
+// The layout is selected by payload length, matching the branches of the
+// Govee decoder.
 func writeGoveeFields(sb *strings.Builder, data []byte) {
 	switch len(data) {
 	case 7: // H5074
@@ -280,10 +279,10 @@ func writeGoveeBatteryField(sb *strings.Builder, offset string, b byte) {
 }
 
 // writeRuuviFields prints the field-by-field breakdown of a 24 byte RuuviTag
-// RAWv2 payload as encoded by encodeRuuviRAWv2.
+// RAWv2 payload as encoded by the encoder.
 func writeRuuviFields(sb *strings.Builder, p []byte) {
-	if len(p) != ruuviPayloadLen {
-		fmt.Fprintf(sb, "  unexpected payload length %d, want %d\n", len(p), ruuviPayloadLen)
+	if len(p) != ruuvi.PayloadLen {
+		fmt.Fprintf(sb, "  unexpected payload length %d, want %d\n", len(p), ruuvi.PayloadLen)
 		return
 	}
 	temp := int16(binary.BigEndian.Uint16(p[1:3]))
@@ -332,7 +331,7 @@ func writeRuuviFields(sb *strings.Builder, p []byte) {
 		fmt.Fprintf(sb, "  movement     %d\n", movement)
 	}
 	fmt.Fprintf(sb, "  sequence     %d (0x%04x)\n", seqno, seqno)
-	fmt.Fprintf(sb, "  MAC          %s\n", macFromMSBFirst(p[18:24]))
+	fmt.Fprintf(sb, "  MAC          %s\n", sensor.MACFromMSBFirst(p[18:24]))
 }
 
 // writeHexDump renders data as offset / hex / ASCII rows, 16 bytes per line.

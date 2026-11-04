@@ -1,30 +1,28 @@
-// Package main implements thermobeacon-ble-go, a Go port of
-// WookyDO/dbus-ble-temp.
+// thermobeacon-ble-go decodes the BLE advertisements of ThermoBeacon, Govee
+// and BTHome thermometers/hygrometers and forwards the readings as RuuviTag
+// RAWv2 packets to Victron's dbus-ble-sensors UDP gateway socket.
 //
-// It listens to BLE advertisements of ThermoBeacon thermometers/hygrometers
-// (Oria, Brifit, SensorBlue and other clones) and of BTHome v2 devices,
-// decodes their readings and re-encodes them as RuuviTag RAWv2 packets for
-// Victron's dbus-ble-sensors UDP gateway socket.
+// Run modes:
+//
+//	(default)     scan and forward readings
+//	--cli         interactive TUI: browse devices, explore payloads
+//	dump          log an annotated dump of every advertisement
+//	list          print the seen-sensor table
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
-	"tinygo.org/x/bluetooth"
+	"github.com/prune998/thermobeacon-ble-go/internal/bridge"
+	"github.com/prune998/thermobeacon-ble-go/internal/cli"
+	"github.com/prune998/thermobeacon-ble-go/internal/config"
+	"github.com/prune998/thermobeacon-ble-go/internal/logging"
+	"github.com/prune998/thermobeacon-ble-go/internal/store"
 )
-
-// defaultDeviceID is the CoreBluetooth peripheral UUID of the sensor to
-// follow. On macOS devices are identified by such an UUID instead of a MAC
-// address. Use "-device all" to decode every ThermoBeacon / BTHome device in
-// range, or a MAC address when running on Linux.
-const defaultDeviceID = "10243784-1324-5413-b00c-9675981a8daa"
 
 // version is injected at build time with -ldflags "-X main.version=..." (the
 // release workflow sets it to the git tag); plain `go build` reports "dev".
@@ -34,12 +32,12 @@ func main() {
 	log.SetFlags(log.LstdFlags)
 
 	var (
-		cfg       Config
+		cfg       config.Config
 		stateFile string
 		showVer   bool
 	)
 
-	flag.StringVar(&cfg.Device, "device", defaultDeviceID,
+	flag.StringVar(&cfg.Device, "device", config.DefaultDeviceID,
 		"device to follow: a CoreBluetooth UUID (macOS), a MAC address (Linux) or 'all'")
 	flag.StringVar(&cfg.UDPHost, "udp-host", "127.0.0.1",
 		"host of Victron's dbus-ble-sensors UDP gateway socket")
@@ -47,6 +45,8 @@ func main() {
 		"port of Victron's dbus-ble-sensors UDP gateway socket")
 	flag.BoolVar(&cfg.NoForward, "no-forward", false,
 		"decode and log readings, but do not send UDP packets")
+	flag.BoolVar(&cfg.CLI, "cli", false,
+		"interactive TUI: browse discovered devices, get their MAC addresses and explore the payloads (no forwarding)")
 	flag.DurationVar(&cfg.MinInterval, "min-interval", 5*time.Second,
 		"at most one forwarded packet per sensor every N seconds")
 	flag.DurationVar(&cfg.IdleWarning, "idle-warning", 120*time.Second,
@@ -55,16 +55,16 @@ func main() {
 		"record of seen sensors ('' disables it); 'thermobeacon-ble-go list' prints it")
 	flag.BoolVar(&cfg.Debug, "debug", false,
 		"log every advertisement and dump its payload in a meaningful way")
-	flag.BoolVar(&cfg.CLI, "cli", false,
-		"interactive TUI: browse discovered devices, get their MAC addresses and explore the payloads (no forwarding)")
 	flag.BoolVar(&showVer, "version", false, "print the version and exit")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, `thermobeacon-ble-go - ThermoBeacon / BTHome -> Victron dbus-ble-sensors bridge
+		fmt.Fprintf(os.Stderr, `thermobeacon-ble-go - ThermoBeacon / Govee / BTHome -> Victron dbus-ble-sensors bridge
 
 Usage:
   thermobeacon-ble-go [flags]        scan and forward readings
   thermobeacon-ble-go [flags] dump   scan and dump every advertisement in a
                                      meaningful way (decode + log only, no UDP)
+  thermobeacon-ble-go --cli          interactive TUI: browse devices and
+                                     payloads, get MAC addresses (no UDP)
   thermobeacon-ble-go [flags] list   print the seen-sensor table
 
 Flags:
@@ -73,7 +73,7 @@ Flags:
 	}
 	flag.Parse()
 
-	debugEnabled = cfg.Debug
+	logging.SetDebug(cfg.Debug)
 
 	if showVer {
 		fmt.Println("thermobeacon-ble-go", version)
@@ -86,7 +86,7 @@ Flags:
 		os.Exit(2)
 	}
 	if cfg.CLI {
-		if err := runCLI(&cfg); err != nil {
+		if err := cli.Run(); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -105,54 +105,23 @@ Flags:
 		if !deviceSet {
 			cfg.Device = "all"
 		}
-		debugEnabled = true
+		logging.SetDebug(true)
 	}
 	if flag.NArg() == 1 && flag.Arg(0) == "list" {
-		if err := listSensors(stateFile); err != nil {
+		if err := store.List(stateFile); err != nil {
 			log.Fatalf("list sensors: %v", err)
 		}
 		return
 	}
-
-	if err := run(&cfg, stateFile); err != nil {
-		log.Fatal(err)
-	}
-}
-
-func run(cfg *Config, stateFile string) error {
-	adapter := bluetooth.DefaultAdapter
-	if err := adapter.Enable(); err != nil {
-		return fmt.Errorf("could not enable the BLE stack: %w", err)
-	}
-
-	store := loadSeenStore(stateFile)
-	bridge := NewBridge(cfg, store)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	go func() {
-		<-ctx.Done()
-		log.Print("shutting down...")
-		_ = adapter.StopScan()
-		time.Sleep(500 * time.Millisecond) // give the scan a moment to stop
-		store.Flush()
-		os.Exit(0)
-	}()
-
-	go bridge.WatchIdle(ctx)
 
 	target := fmt.Sprintf("udp %s:%d", cfg.UDPHost, cfg.UDPPort)
 	if cfg.NoForward {
 		target = "log only"
 	}
 	log.Printf("thermobeacon-ble-go %s: watching %s, forwarding to %s, min interval %s",
-		version, cfg.describeDevice(), target, cfg.MinInterval)
+		version, cfg.DescribeDevice(), target, cfg.MinInterval)
 
-	// Scan blocks until StopScan is called.
-	if err := adapter.Scan(bridge.HandleScan); err != nil {
-		return fmt.Errorf("scan: %w", err)
+	if err := bridge.Run(&cfg, store.Load(stateFile)); err != nil {
+		log.Fatal(err)
 	}
-	store.Flush()
-	return nil
 }

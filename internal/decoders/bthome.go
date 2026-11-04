@@ -1,44 +1,48 @@
-package main
+package decoders
 
 import (
 	"encoding/binary"
 	"errors"
 
 	bthome "github.com/hybridgroup/go-bthome"
+	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 )
+
+// BTHomeServiceUUID is the service data UUID all BTHome devices advertise.
+var BTHomeServiceUUID = bthome.ServiceUUID // 0xFCD2
 
 var (
-	// errBadBTHomeData covers payloads go-bthome cannot safely parse: the
+	// ErrBadBTHomeData covers payloads go-bthome cannot safely parse: the
 	// package panics on unknown measurement type ids and on values that run
 	// past the end of the packet, so the payload is walked first.
-	errBadBTHomeData = errors.New("malformed or unsupported BTHome payload")
+	ErrBadBTHomeData = errors.New("malformed or unsupported BTHome payload")
 
-	errNotBTHomeV2 = errors.New("not an unencrypted BTHome v2 payload")
+	ErrNotBTHomeV2 = errors.New("not an unencrypted BTHome v2 payload")
 )
 
-// decodeBTHome decodes a BTHome v2 service data payload using
+// BTHome decodes a BTHome v2 service data payload using
 // github.com/hybridgroup/go-bthome and maps the measurements it understands
 // onto a Reading.
 //
 // mac is the sensor identity: the advertiser's MAC address where the platform
 // provides one, otherwise a stable pseudo MAC derived from the opaque device
-// id (see pseudoMAC).
+// id.
 //
 // Only unencrypted BTHome v2 is supported. A payload that parses cleanly but
-// contains none of the measurements below yields (nil, nil).
-func decodeBTHome(mac string, data []byte) (*Reading, error) {
+// contains none of the mappable measurements yields (nil, nil).
+func BTHome(mac string, data []byte) (*sensor.Reading, error) {
 	if len(data) < 1 {
-		return nil, errNotBTHomeV2
+		return nil, ErrNotBTHomeV2
 	}
 	// The first byte is the BTHome device information byte: bit 7 marks
 	// encrypted payloads, bits 5-6 the format version (0x40 = v2).
 	if data[0]&0x80 != 0 || data[0]&0x60 != 0x40 {
-		return nil, errNotBTHomeV2
+		return nil, ErrNotBTHomeV2
 	}
 
 	filtered, ok := supportedBTHomeTLVs(data)
 	if !ok {
-		return nil, errBadBTHomeData
+		return nil, ErrBadBTHomeData
 	}
 	if len(filtered) < 2 {
 		return nil, nil // valid BTHome, but nothing we can map
@@ -49,7 +53,7 @@ func decodeBTHome(mac string, data []byte) (*Reading, error) {
 		return nil, err
 	}
 
-	r := &Reading{MAC: mac, Source: "bthome", BatteryPct: -1}
+	r := &sensor.Reading{MAC: mac, Source: "bthome", BatteryPct: -1}
 	battery := -1
 	for _, v := range values {
 		if v == nil {
@@ -90,10 +94,11 @@ func decodeBTHome(mac string, data []byte) (*Reading, error) {
 
 	if r.VoltageMV == 0 && battery >= 0 {
 		// No voltage in the packet: derive a plausible CR2032 voltage from
-		// the battery percentage (see voltageFromBatteryPct) so that the low
-		// battery alarm of dbus-ble-sensors has something to work with.
+		// the battery percentage (see sensor.VoltageFromBatteryPct) so that
+		// the low battery alarm of dbus-ble-sensors has something to work
+		// with.
 		r.BatteryPct = battery
-		r.VoltageMV = voltageFromBatteryPct(battery)
+		r.VoltageMV = sensor.VoltageFromBatteryPct(battery)
 	}
 	if r.Temperature == 0 && r.Humidity == 0 && r.VoltageMV == 0 && !r.BatteryLow {
 		return nil, nil

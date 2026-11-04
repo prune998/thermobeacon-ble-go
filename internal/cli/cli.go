@@ -1,10 +1,10 @@
-package main
-
-// Interactive terminal UI (`--cli`) built with Charm's Bubble Tea: it lists
-// every Bluetooth device discovered while scanning, shows decoded readings
-// (ThermoBeacon / Govee / BTHome) and lets you explore the last advertisement
-// of a selected device - hex dump, field breakdown and the MAC address
-// identity. Nothing is forwarded in this mode.
+// Package cli implements the interactive terminal UI (--cli) built with
+// Charm's Bubble Tea: it lists every Bluetooth device discovered while
+// scanning, shows decoded readings (ThermoBeacon / Govee / BTHome) and lets
+// you explore the last advertisement of a selected device - hex dump, field
+// breakdown and the MAC address identity. Nothing is forwarded in this
+// mode.
+package cli
 
 import (
 	"fmt"
@@ -18,7 +18,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	bthome "github.com/hybridgroup/go-bthome"
+	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
+	"github.com/prune998/thermobeacon-ble-go/internal/dump"
+	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 	"tinygo.org/x/bluetooth"
 )
 
@@ -118,14 +120,14 @@ func newCLIModel(adapter *bluetooth.Adapter) *cliModel {
 	}
 }
 
-// runCLI enables the adapter and runs the interactive TUI until the user
+// Run enables the adapter and runs the interactive TUI until the user
 // quits. Log output is discarded so it cannot garble the terminal.
 //
 // Threading matters here: cbgo services CoreBluetooth callbacks from the
 // main thread, so the blocking adapter.Scan runs on this goroutine (the one
 // that enabled the adapter) while the Tea program runs on its own goroutine
 // and receives events through a channel.
-func runCLI(cfg *Config) error {
+func Run() error {
 	log.SetOutput(io.Discard)
 
 	adapter := bluetooth.DefaultAdapter
@@ -154,7 +156,6 @@ func runCLI(cfg *Config) error {
 		}
 	}()
 
-	// Blocking scan: never stop the BLE callback thread (drop instead).
 	// Blocking scan: never stop the BLE callback thread (drop instead).
 	err := adapter.Scan(func(_ *bluetooth.Adapter, d bluetooth.ScanResult) {
 		select {
@@ -270,7 +271,7 @@ func (m *cliModel) updateDevice(d bluetooth.ScanResult) {
 	if !ok {
 		dev = &cliDevice{
 			addr:      addr,
-			mac:       identityFor(senderMACOf(addr), addr),
+			mac:       sensor.IdentityFor(sensor.SenderMAC(addr), addr),
 			firstSeen: time.Now(),
 		}
 		m.devices[addr] = dev
@@ -308,22 +309,22 @@ func (m *cliModel) updateDevice(d bluetooth.ScanResult) {
 // summary plus the sensor MAC reported by the payload ("" when unknown), or
 // ("", "") when nothing matches.
 func cliReading(d bluetooth.ScanResult, mac string) (string, string) {
-	senderMAC := senderMACOf(d.Address.String())
+	senderMAC := sensor.SenderMAC(d.Address.String())
 
 	for _, mfg := range d.ManufacturerData() {
-		if r, err := decodeThermoBeacon(senderMAC, mfg.CompanyID, mfg.Data); err == nil {
+		if r, err := decoders.ThermoBeacon(senderMAC, mfg.CompanyID, mfg.Data); err == nil {
 			return readingSummary(r), r.MAC
 		}
-		if r, err := decodeGovee(mac, d.LocalName(), mfg.CompanyID, mfg.Data); err == nil {
+		if r, err := decoders.Govee(mac, d.LocalName(), mfg.CompanyID, mfg.Data); err == nil {
 			return readingSummary(r), r.MAC
 		}
 	}
 
 	for _, sd := range d.ServiceData() {
-		if sd.UUID != bthome.ServiceUUID {
+		if sd.UUID != decoders.BTHomeServiceUUID {
 			continue
 		}
-		if r, err := decodeBTHome(mac, sd.Data); err == nil && r != nil {
+		if r, err := decoders.BTHome(mac, sd.Data); err == nil && r != nil {
 			return readingSummary(r), r.MAC
 		}
 	}
@@ -331,7 +332,7 @@ func cliReading(d bluetooth.ScanResult, mac string) (string, string) {
 }
 
 // readingSummary renders a Reading as a compact one line summary.
-func readingSummary(r *Reading) string {
+func readingSummary(r *sensor.Reading) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%.1f°C %.1f%%", r.Temperature, r.Humidity)
 	if r.BatteryPct >= 0 {
@@ -403,7 +404,7 @@ func (m *cliModel) detailText(d *cliDevice) string {
 	row("Updated:", time.Since(d.lastSeen).Truncate(time.Second).String())
 
 	sb.WriteString("\n--- last advertisement ---\n\n")
-	sb.WriteString(dumpScanResultText(d.last, senderMACOf(d.addr), false))
+	sb.WriteString(dump.ScanResultText(d.last, sensor.SenderMAC(d.addr), false))
 
 	return sb.String()
 }
@@ -426,16 +427,6 @@ func cliCompanies(ids []uint16) string {
 	}
 	return strings.Join(parts, ",")
 }
-
-func senderMACOf(addr string) string {
-	if isMACAddress(addr) {
-		if n, err := normalizeMAC(addr); err == nil {
-			return n
-		}
-	}
-	return ""
-}
-
 func orDash(s string) string {
 	if s == "" {
 		return "-"

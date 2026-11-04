@@ -1,14 +1,9 @@
-package main
+package decoders
 
 import (
 	"encoding/hex"
 	"testing"
 )
-
-// Reference payload generated with the decoder layout of the original
-// dbus-ble-temp (struct "<2xH6sHhHI"): button pressed, MAC db:5c:8d:a0:0f:21
-// (LSB first), 2880 mV, 19.25 degC (308), 58 % (928), uptime 2131727 s.
-var sampleThermoBeacon = mustHex("8000210fa08d5cdb400b3401a0030f872000")
 
 func mustHex(s string) []byte {
 	b, err := hex.DecodeString(s)
@@ -18,8 +13,13 @@ func mustHex(s string) []byte {
 	return b
 }
 
+// Reference payload generated with the decoder layout of the original
+// dbus-ble-temp (struct "<2xH6sHhHI"): button pressed, MAC db:5c:8d:a0:0f:21
+// (LSB first), 2880 mV, 19.25 degC (308), 58 % (928), uptime 2131727 s.
+var sampleThermoBeacon = mustHex("8000210fa08d5cdb400b3401a0030f872000")
+
 func TestDecodeThermoBeacon(t *testing.T) {
-	r, err := decodeThermoBeacon("db:5c:8d:a0:0f:21", 0x0010, sampleThermoBeacon)
+	r, err := ThermoBeacon("db:5c:8d:a0:0f:21", 0x0010, sampleThermoBeacon)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestDecodeThermoBeacon(t *testing.T) {
 func TestDecodeThermoBeaconNoButton(t *testing.T) {
 	data := append([]byte(nil), sampleThermoBeacon...)
 	data[0] &^= 0x80
-	r, err := decodeThermoBeacon("db:5c:8d:a0:0f:21", 0x0010, data)
+	r, err := ThermoBeacon("db:5c:8d:a0:0f:21", 0x0010, data)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -60,17 +60,19 @@ func TestDecodeThermoBeaconNoButton(t *testing.T) {
 
 // All known models embed the MAC LSB first, but the original accepts MSB
 // first as well.
+
 func TestDecodeThermoBeaconMSBFirstMAC(t *testing.T) {
-	if _, err := decodeThermoBeacon("21:0f:a0:8d:5c:db", 0x0010, sampleThermoBeacon); err != nil {
+	if _, err := ThermoBeacon("21:0f:a0:8d:5c:db", 0x0010, sampleThermoBeacon); err != nil {
 		t.Fatalf("decode with reversed sender MAC: %v", err)
 	}
 }
 
 // macOS only exposes an opaque device id, so the embedded MAC cannot be
 // verified and a known company id is required instead.
+
 func TestDecodeThermoBeaconWithoutSenderMAC(t *testing.T) {
 	for _, id := range []uint16{0x0010, 0x0011, 0x0015} {
-		r, err := decodeThermoBeacon("", id, sampleThermoBeacon)
+		r, err := ThermoBeacon("", id, sampleThermoBeacon)
 		if err != nil {
 			t.Fatalf("company id 0x%04x: %v", id, err)
 		}
@@ -78,7 +80,7 @@ func TestDecodeThermoBeaconWithoutSenderMAC(t *testing.T) {
 			t.Errorf("company id 0x%04x: MAC = %q", id, r.MAC)
 		}
 	}
-	if _, err := decodeThermoBeacon("", 0x1234, sampleThermoBeacon); err == nil {
+	if _, err := ThermoBeacon("", 0x1234, sampleThermoBeacon); err == nil {
 		t.Error("unknown company id accepted")
 	}
 }
@@ -95,19 +97,20 @@ func TestDecodeThermoBeaconRejects(t *testing.T) {
 		{"embedded MAC mismatch", "aa:bb:cc:dd:ee:ff", sampleThermoBeacon},
 	}
 	for _, tc := range cases {
-		if _, err := decodeThermoBeacon(tc.senderMAC, 0x0010, tc.data); err == nil {
+		if _, err := ThermoBeacon(tc.senderMAC, 0x0010, tc.data); err == nil {
 			t.Errorf("%s: accepted", tc.name)
 		}
 	}
 }
 
 // Negative temperatures are transmitted as signed 1/16 degC.
+
 func TestDecodeThermoBeaconNegativeTemperature(t *testing.T) {
 	data := append([]byte(nil), sampleThermoBeacon...)
 	// -0.5 degC = -8
 	data[10] = 0xf8
 	data[11] = 0xff
-	r, err := decodeThermoBeacon("db:5c:8d:a0:0f:21", 0x0010, data)
+	r, err := ThermoBeacon("db:5c:8d:a0:0f:21", 0x0010, data)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}

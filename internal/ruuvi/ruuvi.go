@@ -1,24 +1,33 @@
-package main
+// Package ruuvi encodes sensor readings as RuuviTag data format 5 ("RAWv2")
+// and wraps them in the UDP gateway packet format v1 of Victron's
+// dbus-ble-sensors.
+//
+// Victron's dbus-ble-sensors has no decoders for the sensor formats this
+// program supports, so the readings are handed to it in the open RuuviTag
+// format of a sensor type it does support.
+package ruuvi
 
 import (
 	"encoding/binary"
 	"fmt"
-	"math"
+
+	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 )
 
-// ruuviManufacturerID is Ruuvi Innovations' Bluetooth SIG company id. Victron's
-// dbus-ble-sensors has no ThermoBeacon decoder, so the readings are handed to
-// it in the open RuuviTag data format 5 ("RAWv2") of a sensor type it supports.
-const ruuviManufacturerID = 0x0499
+// ManufacturerID is Ruuvi Innovations' Bluetooth SIG company id; this is
+// what dbus-ble-sensors expects for its RuuviTag decoder.
+const ManufacturerID = 0x0499
+
+// PayloadLen is the length of a RAWv2 payload in bytes.
+const PayloadLen = 24
 
 const (
 	udpPacketVersion1 = 1
 	udpFlagRSSI       = 0x01
-	ruuviPayloadLen   = 24
 )
 
-// encodeRuuviRAWv2 encodes a reading as RuuviTag data format 5
-// (24 bytes, big endian).
+// EncodeRAWv2 encodes a reading as RuuviTag data format 5 (24 bytes, big
+// endian).
 //
 // Fields the sensor does not have are sent as "invalid", so dbus-ble-sensors
 // does not publish them:
@@ -29,16 +38,16 @@ const (
 //   - battery: clamped to 1.600-3.646 V
 //   - sequence number: caller's choice (uptime for ThermoBeacons)
 //   - MAC: sensor MAC in network order
-func encodeRuuviRAWv2(r *Reading, seqno uint16) ([]byte, error) {
-	if _, err := macToBytes(r.MAC); err != nil {
+func EncodeRAWv2(r *sensor.Reading, seqno uint16) ([]byte, error) {
+	if _, err := sensor.MACToBytes(r.MAC); err != nil {
 		return nil, err
 	}
 
-	buf := make([]byte, ruuviPayloadLen)
+	buf := make([]byte, PayloadLen)
 	buf[0] = 5
 
-	temp := int16(math.Round(clamp(r.Temperature, -163.835, 163.835) * 200))
-	hum := uint16(math.Round(clamp(r.Humidity, 0, 100) * 400))
+	temp := int16(sensor.Clamp(r.Temperature, -163.835, 163.835) * 200)
+	hum := uint16(sensor.Clamp(r.Humidity, 0, 100) * 400)
 
 	binary.BigEndian.PutUint16(buf[1:3], uint16(temp))
 	binary.BigEndian.PutUint16(buf[3:5], hum)
@@ -48,7 +57,7 @@ func encodeRuuviRAWv2(r *Reading, seqno uint16) ([]byte, error) {
 	binary.BigEndian.PutUint16(buf[9:11], 0x8000)  // acceleration y: invalid
 	binary.BigEndian.PutUint16(buf[11:13], 0x8000) // acceleration z: invalid
 
-	batt := clampInt(r.VoltageMV, 1600, 3646) - 1600
+	batt := sensor.ClampInt(r.VoltageMV, 1600, 3646) - 1600
 	if batt == 0x3FF {
 		batt = 0x3FE // dbus-ble-sensors treats raw 0x3ff as invalid - avoid it
 	}
@@ -57,20 +66,20 @@ func encodeRuuviRAWv2(r *Reading, seqno uint16) ([]byte, error) {
 	buf[15] = 0xFF // movement counter: invalid
 	binary.BigEndian.PutUint16(buf[16:18], seqno)
 
-	mac, _ := macToBytes(r.MAC)
+	mac, _ := sensor.MACToBytes(r.MAC)
 	copy(buf[18:24], mac[:])
 	return buf, nil
 }
 
-// buildUDPPacket wraps a manufacturer payload in the UDP gateway packet
+// BuildUDPPacket wraps a manufacturer payload in the UDP gateway packet
 // format v1 of Victron's dbus-ble-sensors:
 //
 //	version (1) | flags (1) | address (6, LSB first) |
 //	manufacturer id (2, LE) | payload length (1) | payload | rssi (1)
 //
 // rssi is always included (flag 0x01).
-func buildUDPPacket(mac string, mfgID uint16, payload []byte, rssi int16) ([]byte, error) {
-	bd, err := macToBDAddr(mac)
+func BuildUDPPacket(mac string, mfgID uint16, payload []byte, rssi int16) ([]byte, error) {
+	bd, err := sensor.MACToBDAddr(mac)
 	if err != nil {
 		return nil, fmt.Errorf("udp packet: %w", err)
 	}
@@ -86,6 +95,6 @@ func buildUDPPacket(mac string, mfgID uint16, payload []byte, rssi int16) ([]byt
 	hdr[2] = byte(len(payload))
 	pkt = append(pkt, hdr[:]...)
 	pkt = append(pkt, payload...)
-	pkt = append(pkt, byte(int8(clampInt(int(rssi), -128, 127))))
+	pkt = append(pkt, byte(int8(sensor.ClampInt(int(rssi), -128, 127))))
 	return pkt, nil
 }

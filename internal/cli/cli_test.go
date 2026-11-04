@@ -1,17 +1,46 @@
-package main
+package cli
 
 import (
 	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
 	"tinygo.org/x/bluetooth"
-
-	bthome "github.com/hybridgroup/go-bthome"
 )
 
 // ansiRe strips terminal styling from rendered strings in assertions.
 var ansiRe = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// Test fixtures (duplicated per package; see internal/decoders tests).
+
+var sampleThermoBeacon = []byte{0x80, 0x00, 0x21, 0x0F, 0xA0, 0x8D, 0x5C, 0xDB, 0x40, 0x0B, 0x34, 0x01, 0xA0, 0x03, 0x0F, 0x87, 0x20, 0x00}
+
+var goveeRealH5074 = []byte{0x00, 0xF8, 0x09, 0x9F, 0x1C, 0x64, 0x02}
+
+var sampleBTHome = []byte{
+	0x40,
+	0x45, 0xD7, 0x00,
+	0x03, 0x62, 0x11,
+	0x01, 0x57,
+	0x15, 0x01,
+	0x3D, 0x05, 0x00,
+}
+
+// fakePayload implements bluetooth.AdvertisementPayload with structured data,
+// the way the macOS stack delivers it (Bytes() returns nil).
+type fakePayload struct {
+	name string
+	mfg  []bluetooth.ManufacturerDataElement
+	svc  []bluetooth.ServiceDataElement
+}
+
+func (f *fakePayload) LocalName() string                                     { return f.name }
+func (f *fakePayload) HasServiceUUID(bluetooth.UUID) bool                    { return false }
+func (f *fakePayload) ServiceUUIDs() []bluetooth.UUID                        { return nil }
+func (f *fakePayload) Bytes() []byte                                         { return nil }
+func (f *fakePayload) ManufacturerData() []bluetooth.ManufacturerDataElement { return f.mfg }
+func (f *fakePayload) ServiceData() []bluetooth.ServiceDataElement           { return f.svc }
 
 func TestCLIReadingSummary(t *testing.T) {
 	// ThermoBeacon (macOS path: no sender MAC, known company id) - the
@@ -34,7 +63,7 @@ func TestCLIReadingSummary(t *testing.T) {
 	// Govee real capture: battery percentage instead of voltage.
 	res.AdvertisementPayload = &fakePayload{
 		name: "Govee_H5074_88DE",
-		mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: goveeCompanyIDH50xx, Data: goveeRealH5074}},
+		mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: decoders.GoveeCompanyID, Data: goveeRealH5074}},
 	}
 	summary, readingMAC = cliReading(res, "ba:e2:52:36:ff:28")
 	if summary != "25.5°C 73.3% 100%" {
@@ -46,7 +75,7 @@ func TestCLIReadingSummary(t *testing.T) {
 
 	// BTHome service data.
 	res.AdvertisementPayload = &fakePayload{
-		svc: []bluetooth.ServiceDataElement{{UUID: bthome.ServiceUUID, Data: sampleBTHome}},
+		svc: []bluetooth.ServiceDataElement{{UUID: decoders.BTHomeServiceUUID, Data: sampleBTHome}},
 	}
 	summary, _ = cliReading(res, "aa:bb:cc:dd:ee:ff")
 	if summary != "21.5°C 44.5% 87% [low]" {
@@ -69,7 +98,7 @@ func TestCLIUpdateDevice(t *testing.T) {
 		RSSI: -50,
 		AdvertisementPayload: &fakePayload{
 			name: "Govee_H5074_88DE",
-			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: goveeCompanyIDH50xx, Data: goveeRealH5074}},
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: decoders.GoveeCompanyID, Data: goveeRealH5074}},
 		},
 	}
 	addr := "f1ae0297-b710-1440-2881-9274ad58590d"
@@ -94,7 +123,7 @@ func TestCLIUpdateDevice(t *testing.T) {
 	if dev.mac == "" {
 		t.Error("identity MAC not set")
 	}
-	if len(dev.companies) != 1 || dev.companies[0] != goveeCompanyIDH50xx {
+	if len(dev.companies) != 1 || dev.companies[0] != decoders.GoveeCompanyID {
 		t.Errorf("companies = %v", dev.companies)
 	}
 	if dev.reading == "" {
@@ -128,7 +157,7 @@ func TestCLICompaniesAndDetail(t *testing.T) {
 		RSSI: -50,
 		AdvertisementPayload: &fakePayload{
 			name: "Govee_H5074_88DE",
-			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: goveeCompanyIDH50xx, Data: goveeRealH5074}},
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: decoders.GoveeCompanyID, Data: goveeRealH5074}},
 		},
 	}
 	res.Address.Set("f1ae0297-b710-1440-2881-9274ad58590d")

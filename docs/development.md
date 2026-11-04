@@ -110,19 +110,20 @@ The test suite needs no Bluetooth hardware. It covers, among others:
 
 ## Project layout
 
-| File | Purpose |
+The application is split into packages under `internal/`:
+
+| Package | Purpose |
 |---|---|
-| `main.go` | flags, subcommands (`list`, `dump`), scan lifecycle, signal handling |
-| `config.go` | runtime options, device filter, `debugf` |
-| `cli.go` | `--cli` interactive TUI (Bubble Tea): device browser, payload explorer |
-| `sensor.go` | `Reading` type, MAC helpers, pseudo MAC, voltage derivation |
-| `thermobeacon.go` | ThermoBeacon decoder (port of the original Python decoder) |
-| `govee.go` | Govee decoder (H5074, H5072/H5075, H51xx family) |
-| `bthome.go` | BTHome v2 decoder via go-bthome, payload pre-validation |
-| `ruuvi.go` | RuuviTag RAWv2 encoder + dbus-ble-sensors UDP packet v1 |
-| `bridge.go` | scan callback, decoders wiring, rate limiting, forwarding, idle watchdog, UDP sender |
-| `dump.go` | annotated payload dumps for `-debug` / `dump` |
-| `state.go` | `sensors.json` seen store and the `list` output |
+| `main` | flags, run modes (forward / `dump` / `--cli` / `list`), startup log, version |
+| `internal/config` | runtime options, device filter, default device id |
+| `internal/logging` | debug logging switch (`-debug`) |
+| `internal/sensor` | `Reading` type, MAC helpers, identity, pseudo MAC, voltage derivation |
+| `internal/decoders` | **all sensor decoders**: ThermoBeacon, Govee (H5074/H5075/H51xx), BTHome v2 |
+| `internal/ruuvi` | RuuviTag RAWv2 encoder + dbus-ble-sensors UDP gateway packet v1 |
+| `internal/bridge` | scan callback, decoders wiring, rate limiting, forwarding, idle watchdog, UDP sender |
+| `internal/dump` | annotated payload dumps for `-debug` / `dump` / the TUI detail view |
+| `internal/store` | `sensors.json` seen store and the `list` output |
+| `internal/cli` | `--cli` interactive TUI (Bubble Tea): device browser, payload explorer |
 
 Dependency notes:
 
@@ -138,25 +139,26 @@ Dependency notes:
 ## Data flow in code
 
 ```
-adapter.Scan                     (main.go)
+adapter.Scan                     (internal/bridge)
   └─ Bridge.HandleScan           (bridge.go)
-       ├─ acceptsDevice          (config.go)        device filter, -device
-       ├─ debugDumpScan          (dump.go)          annotated hex + field dump
-       ├─ decodeThermoBeacon     (thermobeacon.go)  18-byte manufacturer data
-       ├─ decodeGovee            (govee.go)         0xEC88 / 0x0001 layouts
-       ├─ decodeBTHome           (bthome.go)        service data 0xFCD2
+       ├─ cfg.AcceptsDevice      (internal/config)   device filter, -device
+       ├─ dump.DebugDumpScan     (internal/dump)     annotated hex + field dump
+       ├─ decoders.ThermoBeacon  (internal/decoders) 18-byte manufacturer data
+       ├─ decoders.Govee         (internal/decoders) 0xEC88 / 0x0001 layouts
+       ├─ decoders.BTHome        (internal/decoders) service data 0xFCD2
        └─ Bridge.forward         (bridge.go)
             ├─ rate limit per MAC (min-interval)
-            ├─ encodeRuuviRAWv2   (ruuvi.go)         24-byte payload
-            ├─ buildUDPPacket     (ruuvi.go)         gateway packet v1
-            ├─ udpSender.send     (bridge.go)        WriteTo 127.0.0.1:18542
-            ├─ debugDumpRuuvi     (dump.go)          RAWv2 field dump
-            └─ SeenStore.Update   (state.go)         sensors.json
+            ├─ ruuvi.EncodeRAWv2  (internal/ruuvi)    24-byte payload
+            ├─ ruuvi.BuildUDPPacket                   gateway packet v1
+            ├─ udpSender.send     (bridge.go)         WriteTo 127.0.0.1:18542
+            ├─ dump.DebugDumpRuuvi(internal/dump)     RAWv2 field dump
+            └─ store.Update       (internal/store)    sensors.json
 ```
 
-The `Reading` struct (`sensor.go`) is the boundary between decoding and
-forwarding: decoders fill it, the bridge only forwards it. Add new fields
-there (and to `SensorEntry` in `state.go`) if a new format carries more data.
+The `sensor.Reading` struct (`internal/sensor`) is the boundary between
+decoding and forwarding: decoders fill it, the bridge only forwards it. Add
+new fields there (and to `SensorEntry` in `internal/store`) if a new format
+carries more data.
 
 ## Adding a new sensor format
 

@@ -1,4 +1,7 @@
-package main
+// Package store keeps the record of seen sensors (sensors.json) and renders
+// it for the list subcommand - the equivalent of the sensors.json and
+// bin/sensors.py list of dbus-ble-temp.
+package store
 
 import (
 	"encoding/json"
@@ -12,15 +15,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 )
 
 const (
-	// stateFlushInterval limits how often the state file is written to spare
-	// the flash memory of a GX device. A new sensor always flushes right away.
-	stateFlushInterval = 5 * time.Minute
+	// flushInterval limits how often the state file is written to spare the
+	// flash memory of a GX device. A new sensor always flushes right away.
+	flushInterval = 5 * time.Minute
 
-	// stateExpire drops sensors that have not been seen for 30 days.
-	stateExpire = 30 * 24 * time.Hour
+	// expireAfter drops sensors that have not been seen for 30 days.
+	expireAfter = 30 * 24 * time.Hour
 )
 
 // SensorEntry is the record of one seen sensor, as stored in sensors.json.
@@ -36,8 +41,8 @@ type SensorEntry struct {
 	Model       string  `json:"model,omitempty"`
 }
 
-// SeenStore keeps {mac: SensorEntry} in a small JSON file, the equivalent of
-// the sensors.json of dbus-ble-temp. It is safe for concurrent use.
+// SeenStore keeps {mac: SensorEntry} in a small JSON file. It is safe for
+// concurrent use.
 type SeenStore struct {
 	path      string
 	mu        sync.Mutex
@@ -46,9 +51,9 @@ type SeenStore struct {
 	lastFlush time.Time
 }
 
-// loadSeenStore reads the state file (missing or broken files are not fatal)
-// and expires entries older than 30 days.
-func loadSeenStore(path string) *SeenStore {
+// Load reads the state file (missing or broken files are not fatal) and
+// expires entries older than 30 days.
+func Load(path string) *SeenStore {
 	s := &SeenStore{path: path, data: map[string]SensorEntry{}}
 	if path == "" {
 		return s
@@ -69,7 +74,7 @@ func loadSeenStore(path string) *SeenStore {
 
 	now := time.Now()
 	for mac, e := range s.data {
-		if now.Sub(time.Unix(e.LastSeen, 0)) > stateExpire {
+		if now.Sub(time.Unix(e.LastSeen, 0)) > expireAfter {
 			delete(s.data, mac)
 			log.Printf("forgot sensor %s (not seen for more than 30 days)", mac)
 		}
@@ -78,8 +83,8 @@ func loadSeenStore(path string) *SeenStore {
 }
 
 // Update records a reading. New sensors are flushed immediately, everything
-// else at most every stateFlushInterval.
-func (s *SeenStore) Update(r *Reading, rssi int16, now time.Time) {
+// else at most every flushInterval.
+func (s *SeenStore) Update(r *sensor.Reading, rssi int16, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -103,7 +108,7 @@ func (s *SeenStore) Update(r *Reading, rssi int16, now time.Time) {
 	s.data[r.MAC] = entry
 	s.dirty = true
 
-	if !seen || now.Sub(s.lastFlush) >= stateFlushInterval {
+	if !seen || now.Sub(s.lastFlush) >= flushInterval {
 		s.flushLocked()
 	}
 }
@@ -135,13 +140,13 @@ func (s *SeenStore) flushLocked() {
 	s.lastFlush = time.Now()
 }
 
-// listSensors prints the recorded sensors, the equivalent of the
+// List prints the recorded sensors, the equivalent of the
 // 'bin/sensors.py list' of dbus-ble-temp.
-func listSensors(path string) error {
+func List(path string) error {
 	if path == "" {
 		return errors.New("no state file configured (-state)")
 	}
-	s := loadSeenStore(path)
+	s := Load(path)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

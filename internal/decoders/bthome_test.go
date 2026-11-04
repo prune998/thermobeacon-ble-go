@@ -1,4 +1,4 @@
-package main
+package decoders
 
 import (
 	"math"
@@ -23,7 +23,7 @@ var sampleBTHome = []byte{
 }
 
 func TestDecodeBTHome(t *testing.T) {
-	r, err := decodeBTHome("aa:bb:cc:dd:ee:ff", sampleBTHome)
+	r, err := BTHome("aa:bb:cc:dd:ee:ff", sampleBTHome)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -62,7 +62,7 @@ func TestDecodeBTHomeExplicitVoltage(t *testing.T) {
 		0x0C, 0x64, 0x0A, // voltage 0x0C, 2660 mV
 		0x01, 0x32, // battery 50 %
 	}
-	r, err := decodeBTHome("aa:bb:cc:dd:ee:ff", data)
+	r, err := BTHome("aa:bb:cc:dd:ee:ff", data)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestDecodeBTHomeExplicitVoltage(t *testing.T) {
 func TestDecodeBTHomeTemperature2(t *testing.T) {
 	// temperature 0x02, factor 0.01: 2345 -> 23.45 degC
 	data := []byte{0x40, 0x02, 0x29, 0x09}
-	r, err := decodeBTHome("aa:bb:cc:dd:ee:ff", data)
+	r, err := BTHome("aa:bb:cc:dd:ee:ff", data)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestDecodeBTHomeRejects(t *testing.T) {
 		{"truncated value", []byte{0x40, 0x45, 0xD7}},
 	}
 	for _, tc := range cases {
-		r, err := decodeBTHome("aa:bb:cc:dd:ee:ff", tc.data)
+		r, err := BTHome("aa:bb:cc:dd:ee:ff", tc.data)
 		if err == nil {
 			t.Errorf("%s: accepted (reading %+v)", tc.name, r)
 		}
@@ -105,7 +105,7 @@ func TestDecodeBTHomeRejects(t *testing.T) {
 // A valid BTHome packet without any measurement we map yields (nil, nil).
 func TestDecodeBTHomeNothingUsable(t *testing.T) {
 	data := []byte{0x40, 0x3D, 0x05, 0x00} // only a count16
-	r, err := decodeBTHome("aa:bb:cc:dd:ee:ff", data)
+	r, err := BTHome("aa:bb:cc:dd:ee:ff", data)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
