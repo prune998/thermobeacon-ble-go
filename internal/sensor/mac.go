@@ -97,15 +97,18 @@ func PseudoMAC(deviceID string) string {
 }
 
 // SenderMAC returns the normalized MAC address of a platform address, or ""
-// when the platform does not expose MAC addresses (macOS).
+// when the platform does not expose MAC addresses (macOS) or the address is
+// unset (all-zero - on Linux an unset bluetooth.Address renders as
+// "00:00:00:00:00:00", which must not be mistaken for a real MAC).
 func SenderMAC(addr string) string {
 	if !IsMACAddress(addr) {
 		return ""
 	}
-	if n, err := NormalizeMAC(addr); err == nil {
-		return n
+	n, err := NormalizeMAC(addr)
+	if err != nil || n == "00:00:00:00:00:00" {
+		return ""
 	}
-	return ""
+	return n
 }
 
 // IdentityFor returns the sensor identity: the advertiser MAC where the

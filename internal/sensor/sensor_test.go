@@ -144,3 +144,18 @@ func TestSourceLabel(t *testing.T) {
 		t.Errorf("sourceLabel = %q, want %q", got, "ThermoBeacon")
 	}
 }
+
+func TestSenderMACZeroAddress(t *testing.T) {
+	// On Linux an unset bluetooth.Address renders as 00:00:00:00:00:00; it
+	// must not be mistaken for a real sensor MAC (this broke the ThermoBeacon
+	// path in the CLI tests on Linux).
+	if got := SenderMAC("00:00:00:00:00:00"); got != "" {
+		t.Errorf("SenderMAC(zero MAC) = %q, want empty", got)
+	}
+	if got := SenderMAC("db:5c:8d:a0:0f:21"); got != "db:5c:8d:a0:0f:21" {
+		t.Errorf("SenderMAC = %q, want the normalized MAC", got)
+	}
+	if got := SenderMAC("00000000-0000-0000-0000-000000000000"); got != "" {
+		t.Errorf("SenderMAC(uuid) = %q, want empty", got)
+	}
+}
