@@ -264,9 +264,16 @@ func (m *cliModel) resize() {
 	m.viewport.Height = max(6, m.height-4)
 }
 
-// updateDevice folds one advertisement into the device list.
+// updateDevice folds one advertisement into the device list, keyed by the
+// platform address.
 func (m *cliModel) updateDevice(d bluetooth.ScanResult) {
-	addr := d.Address.String()
+	m.upsertDevice(d.Address.String(), d)
+}
+
+// upsertDevice folds one advertisement into the device list under the given
+// address. Split from updateDevice so tests can use arbitrary addresses
+// without depending on how the platform parses them.
+func (m *cliModel) upsertDevice(addr string, d bluetooth.ScanResult) {
 	dev, ok := m.devices[addr]
 	if !ok {
 		dev = &cliDevice{

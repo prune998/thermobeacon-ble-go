@@ -102,10 +102,9 @@ func TestCLIUpdateDevice(t *testing.T) {
 		},
 	}
 	addr := "f1ae0297-b710-1440-2881-9274ad58590d"
-	res.Address.Set(addr)
-	m.updateDevice(res)
+	m.upsertDevice(addr, res)
 	res.RSSI = -40
-	m.updateDevice(res)
+	m.upsertDevice(addr, res)
 
 	if len(m.order) != 1 {
 		t.Fatalf("device list has %d entries, want 1", len(m.order))
@@ -137,8 +136,7 @@ func TestCLIUpdateDevice(t *testing.T) {
 			mfg: []bluetooth.ManufacturerDataElement{{CompanyID: 0x0010, Data: sampleThermoBeacon}},
 		},
 	}
-	res2.Address.Set("00000000-0000-0000-0000-000000000001")
-	m.updateDevice(res2)
+	m.upsertDevice("00000000-0000-0000-0000-000000000001", res2)
 	if len(m.order) != 2 || m.order[0] != addr || m.order[1] != "00000000-0000-0000-0000-000000000001" {
 		t.Errorf("order = %v", m.order)
 	}
@@ -160,8 +158,7 @@ func TestCLICompaniesAndDetail(t *testing.T) {
 			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: decoders.GoveeCompanyID, Data: goveeRealH5074}},
 		},
 	}
-	res.Address.Set("f1ae0297-b710-1440-2881-9274ad58590d")
-	m.updateDevice(res)
+	m.upsertDevice("f1ae0297-b710-1440-2881-9274ad58590d", res)
 	dev := m.devices["f1ae0297-b710-1440-2881-9274ad58590d"]
 
 	detail := m.detailText(dev)
