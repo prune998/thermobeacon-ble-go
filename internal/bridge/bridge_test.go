@@ -14,6 +14,7 @@ import (
 	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
 	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 	"github.com/prune998/thermobeacon-ble-go/internal/store"
+	"tinygo.org/x/bluetooth"
 )
 
 func (f *fakeSender) send(pkt []byte) error {
@@ -28,7 +29,29 @@ func (f *fakeSender) send(pkt []byte) error {
 
 func (*fakeError) Error() string { return "fake send error" }
 
+// ibeaconFixture: classic example iBeacon payload (type 02, length 15,
+// proximity UUID, major 1, minor 2, measured TX power -59).
+var ibeaconFixture = []byte{
+	0x02, 0x15,
+	0xE2, 0xC5, 0x6D, 0xB5, 0xDF, 0xFB, 0x48, 0xD2,
+	0xB0, 0x60, 0xD0, 0xF5, 0xA7, 0x10, 0x96, 0xE6,
+	0x00, 0x01, 0x00, 0x02, 0xC5,
+}
+
 var errFake = &fakeError{}
+
+// fakePayload implements bluetooth.AdvertisementPayload with structured data.
+type fakePayload struct {
+	name string
+	mfg  []bluetooth.ManufacturerDataElement
+}
+
+func (f *fakePayload) LocalName() string                                     { return f.name }
+func (f *fakePayload) HasServiceUUID(bluetooth.UUID) bool                    { return false }
+func (f *fakePayload) ServiceUUIDs() []bluetooth.UUID                        { return nil }
+func (f *fakePayload) Bytes() []byte                                         { return nil }
+func (f *fakePayload) ManufacturerData() []bluetooth.ManufacturerDataElement { return f.mfg }
+func (f *fakePayload) ServiceData() []bluetooth.ServiceDataElement           { return nil }
 
 type fakeSender struct {
 	pkts [][]byte
@@ -189,5 +212,30 @@ func TestNoteAppleBlob(t *testing.T) {
 	b.noteAppleBlob("other-device", "")
 	if strings.Count(buf.String(), "INTELLI_ROCKS blob") != 1 {
 		t.Errorf("non-Govee device hinted:\n%s", buf.String())
+	}
+}
+
+// iBeacon advertisements carry no sensor data: HandleScan must drop them
+// entirely - nothing forwarded, nothing captured.
+func TestHandleScanSkipsIBeacon(t *testing.T) {
+	b := New(&config.Config{Device: "all", MinInterval: time.Second}, store.Load(""))
+	fs := &fakeSender{}
+	b.sender = fs
+
+	ibeacon := bluetooth.ScanResult{
+		RSSI: -60,
+		AdvertisementPayload: &fakePayload{
+			name: "Proximity Beacon",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: decoders.CompanyIDApple, Data: ibeaconFixture}},
+		},
+	}
+	b.HandleScan(nil, ibeacon)
+	b.HandleScan(nil, ibeacon)
+
+	if len(fs.pkts) != 0 {
+		t.Errorf("forwarded %d packets for an iBeacon, want 0", len(fs.pkts))
+	}
+	if len(b.known) != 0 {
+		t.Error("iBeacon tracked as a known sensor")
 	}
 }

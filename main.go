@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/prune998/thermobeacon-ble-go/internal/bridge"
+	"github.com/prune998/thermobeacon-ble-go/internal/capture"
 	"github.com/prune998/thermobeacon-ble-go/internal/cli"
 	"github.com/prune998/thermobeacon-ble-go/internal/config"
 	"github.com/prune998/thermobeacon-ble-go/internal/logging"
@@ -45,8 +46,12 @@ func main() {
 		"port of Victron's dbus-ble-sensors UDP gateway socket")
 	flag.BoolVar(&cfg.NoForward, "no-forward", false,
 		"decode and log readings, but do not send UDP packets")
+	flag.StringVar(&cfg.Capture, "capture", "",
+		"append every matching advertisement to this file as JSON lines (replayable with the replay subcommand)")
 	flag.BoolVar(&cfg.CLI, "cli", false,
 		"interactive TUI: browse discovered devices, get their MAC addresses and explore the payloads (no forwarding)")
+	flag.DurationVar(&cfg.Refresh, "refresh", time.Second,
+		"--cli only: refresh the device list only after this interval")
 	flag.DurationVar(&cfg.MinInterval, "min-interval", 5*time.Second,
 		"at most one forwarded packet per sensor every N seconds")
 	flag.DurationVar(&cfg.IdleWarning, "idle-warning", 120*time.Second,
@@ -65,6 +70,8 @@ Usage:
                                      meaningful way (decode + log only, no UDP)
   thermobeacon-ble-go --cli          interactive TUI: browse devices and
                                      payloads, get MAC addresses (no UDP)
+  thermobeacon-ble-go replay <file>  replay a capture file through the
+                                     decoders (add support for new devices)
   thermobeacon-ble-go [flags] list   print the seen-sensor table
 
 Flags:
@@ -80,13 +87,24 @@ Flags:
 		return
 	}
 
+	if flag.NArg() > 0 && flag.Arg(0) == "replay" {
+		if flag.NArg() != 2 {
+			fmt.Fprintln(os.Stderr, "usage: thermobeacon-ble-go replay <capture-file>")
+			os.Exit(2)
+		}
+		if err := capture.Replay(flag.Arg(1)); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	if flag.NArg() > 1 || (flag.NArg() == 1 && flag.Arg(0) != "list" && flag.Arg(0) != "dump") {
 		fmt.Fprintf(os.Stderr, "unexpected argument %q\n\n", flag.Arg(0))
 		flag.Usage()
 		os.Exit(2)
 	}
 	if cfg.CLI {
-		if err := cli.Run(); err != nil {
+		if err := cli.Run(cfg.Refresh); err != nil {
 			log.Fatal(err)
 		}
 		return

@@ -254,3 +254,16 @@ func TestDecodeGoveeUnknown(t *testing.T) {
 		t.Error("Apple company id with 8 bytes accepted")
 	}
 }
+
+// A bare INTELLI_ROCKS blob (23 bytes, no measurement payload in front of
+// it) must be rejected, not stripped into a negative slice - regression for
+// a panic caught by replaying a live capture.
+func TestDecodeGoveeBareIntelliRocksBlobNoPanic(t *testing.T) {
+	blob := goveeIntelliRocksBlob[2:] // drop the company id bytes: 23 bytes
+	if _, err := Govee("", "", GoveeCompanyID, blob); err == nil {
+		t.Error("bare blob accepted")
+	}
+	if _, err := Govee("", "", CompanyIDApple, blob); err == nil {
+		t.Error("bare blob with Apple company id accepted")
+	}
+}

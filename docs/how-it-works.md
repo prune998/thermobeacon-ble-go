@@ -88,6 +88,10 @@ Details:
   elements tried for BTHome.
 - **Device filter.** `-device` accepts a CoreBluetooth UUID (macOS), a MAC
   address (Linux/Windows) or `all`. Everything else is ignored silently.
+- **iBeacon skip.** Advertisements that carry nothing but iBeacon data
+  (Apple company id, type 0x02 + length 0x15 framing — including the
+  INTELLI_ROCKS frames Govee devices emit) are dropped before decoding:
+  not dumped, not listed, not captured.
 - **Idle watchdog.** Every advertisement — matching or not — resets a timer.
   If no BLE traffic at all is seen for `-idle-warning` (default 2 min), the
   bridge logs a warning; on a GX device this usually means *Bluetooth sensors*

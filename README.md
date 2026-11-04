@@ -109,6 +109,7 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 |---|---|
 | *(none)* | scan and forward readings |
 | `dump` | scan and dump **every** advertisement in a meaningful way — decode + log only, no UDP; lifts the default device filter unless `-device` is given |
+| `replay <file>` | replay a capture file through the decoders and dump — the workflow for adding support for new devices |
 | `list` | print the seen-sensor table from the state file |
 
 ### Flags
@@ -119,6 +120,8 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 | `-udp-host` / `-udp-port` | `127.0.0.1` / `18542` | dbus-ble-sensors UDP gateway socket |
 | `-no-forward` | off | decode and log only, never send UDP packets |
 | `-cli` | off | interactive TUI: browse devices, get MAC addresses, explore payloads (no forwarding) |
+| `-refresh <dur>` | `1s` | `--cli` only: refresh the device list only after this interval (min 250ms) |
+| `-capture <file>` | off | append every matching advertisement to a JSON Lines file (replayable) |
 | `-min-interval` | `5s` | at most one forwarded packet per sensor every N seconds |
 | `-idle-warning` | `2m` | warn when no BLE advertisement at all was seen for N seconds |
 | `-state` | `sensors.json` | seen-sensor record (`''` disables; read by `list`) |
@@ -129,24 +132,51 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 `./thermobeacon-ble-go --cli` opens a terminal UI (built with
 [Charm Bubble Tea](https://github.com/charmbracelet/bubbletea)) that lists every
 Bluetooth device in range as it is discovered — address, name, RSSI, company
-ids and decoded readings (ThermoBeacon / Govee / BTHome). Navigate with the
+ids, payload size and decoded readings (ThermoBeacon / Govee / BTHome).
+Navigate with the
 arrow keys, press **enter** to explore the last advertisement of the selected
-device (identity incl. MAC address, full hex dump and field breakdown), **esc**
-to go back, **q** to quit. Nothing is forwarded in this mode.
+device (identity incl. MAC address, full hex dump and field breakdown), **s**
+to cycle the list sort (address, name, RSSI, company, reading, last seen —
+the sorted column is marked bold in the header), **c** to capture the selected
+device's frames to a file, **esc** to go back, **q** to quit. Nothing is
+forwarded in this mode. iBeacon advertisements (Apple proximity beacons,
+including the INTELLI_ROCKS frames Govee devices emit) are detected and
+dropped entirely — they carry no sensor data.
 
 ```
  thermb   ─ bluetooth devices
- Address                                  Name                  RSSI   Company    Reading              Seen
- ─────────────────────────────────────────────────────────────────────────────────────────────────────
- f1ae0297-b710-1440-2881-9274ad58590d     Govee_H5074_88DE      -35    0x004c     -                    0s
- db:5c:8d:a0:0f:21                        Oria                  -52    0x0010     19.2°C 58.0% 2.88V   3s
+ Address                                  Name                  RSSI   Company    Size      Reading              Seen
+ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ f1ae0297-b710-1440-2881-9274ad58590d     Govee_H5074_88DE      -35    0x004c     23 B      -                    0s
+ db:5c:8d:a0:0f:21                        Oria                  -52    0x0010     18 B      19.2°C 58.0% 2.88V   3s
  3 devices, 1 with decoded readings, scanning
- ↑/↓ navigate • enter: explore payload • esc: back • q: quit • devices appear as their advertisement data changes
+ ↑/↓ navigate • enter: explore payload • s: sort • c: capture • esc: back • q: quit • devices appear as their advertisement data changes
 ```
 
 macOS coalesces identical advertisements, so devices appear when their
 advertisement data changes — a device with static content shows up once; Govee
-sensors surface their measurement frame whenever the values change.
+sensors surface their measurement frame whenever the values change. Use
+`-refresh 5s` (for example) to slow the display down further: new readings are
+absorbed immediately but the list only redraws on the interval.
+
+### Capturing payloads for new device support
+
+To add a decoder for a device nobody has captured yet:
+
+1. **Capture real frames** — either select the device in the TUI (`--cli`,
+   press `c` to start/stop; the file is `capture-<address>.jsonl`) or run
+   `./thermobeacon-ble-go -device all -capture mydevice.jsonl` and wait for a
+   few broadcasts.
+2. **Replay the capture** — `./thermobeacon-ble-go replay mydevice.jsonl`
+   feeds every frame through the decoders and the annotated dump, printing
+   per frame whether it decoded and, if not, the hex to implement against.
+3. **Implement the decoder** in `internal/decoders` (see
+   [docs/development.md](docs/development.md)) and use the captured bytes as
+   test fixtures.
+
+The capture format is JSON Lines: one advertisement per line with address,
+identity, name, RSSI and hex-encoded manufacturer/service data — hand-editable,
+append-friendly and diff-able.
 
 ### Debugging
 

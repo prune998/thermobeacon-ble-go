@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prune998/thermobeacon-ble-go/internal/capture"
 	"github.com/prune998/thermobeacon-ble-go/internal/config"
 	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
 	"github.com/prune998/thermobeacon-ble-go/internal/dump"
@@ -36,9 +37,10 @@ type packetSender interface {
 
 // Bridge decodes advertisements and forwards readings.
 type Bridge struct {
-	cfg    *config.Config
-	store  *store.SeenStore
-	sender packetSender
+	cfg     *config.Config
+	store   *store.SeenStore
+	sender  packetSender
+	capture *capture.Writer
 
 	mu            sync.Mutex
 	lastSent      map[string]time.Time
@@ -51,7 +53,7 @@ type Bridge struct {
 
 // New creates a Bridge for the given configuration and state store.
 func New(cfg *config.Config, store *store.SeenStore) *Bridge {
-	return &Bridge{
+	b := &Bridge{
 		cfg:           cfg,
 		store:         store,
 		sender:        newUDPSender(cfg.UDPHost, cfg.UDPPort),
@@ -60,6 +62,24 @@ func New(cfg *config.Config, store *store.SeenStore) *Bridge {
 		unknownLogged: map[string]bool{},
 		appleLogged:   map[string]bool{},
 		lastAdv:       time.Now(),
+	}
+	if cfg.Capture != "" {
+		w, err := capture.NewWriter(cfg.Capture)
+		if err != nil {
+			log.Printf("WARNING: could not open capture file %s: %v", cfg.Capture, err)
+		} else {
+			b.capture = w
+			log.Printf("capturing matching advertisements to %s", cfg.Capture)
+		}
+	}
+	return b
+}
+
+// closeCapture closes the capture file, if one is open.
+func (b *Bridge) closeCapture() {
+	if b.capture != nil {
+		_ = b.capture.Close()
+		b.capture = nil
 	}
 }
 
@@ -92,6 +112,7 @@ func Run(cfg *config.Config, st *store.SeenStore) error {
 		return fmt.Errorf("scan: %w", err)
 	}
 	st.Flush()
+	b.closeCapture()
 	return nil
 }
 
@@ -111,6 +132,21 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 	addr := device.Address.String()
 	if !b.cfg.AcceptsDevice(addr) {
 		return
+	}
+
+	// iBeacon advertisements (Apple proximity beacons, including the
+	// INTELLI_ROCKS frames Govee devices emit) carry no sensor data: skip
+	// them entirely - not captured, not dumped, not decoded.
+	if decoders.IsIBeaconAdvertisement(device.ManufacturerData(), device.ServiceData()) {
+		logging.Debugf("%s iBeacon advertisement - skipped", addr)
+		return
+	}
+
+	// Capture mode: append the raw advertisement for later replay.
+	if b.capture != nil {
+		if err := b.capture.Write(capture.FromScanResult(device)); err != nil {
+			logging.Debugf("capture write failed: %v", err)
+		}
 	}
 
 	senderMAC := sensor.SenderMAC(addr)

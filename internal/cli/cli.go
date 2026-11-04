@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/prune998/thermobeacon-ble-go/internal/capture"
 	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
 	"github.com/prune998/thermobeacon-ble-go/internal/dump"
 	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
@@ -44,6 +47,63 @@ var (
 			Bold(true)
 )
 
+// cliColumn is one column of the device table.
+type cliColumn struct {
+	title string
+	width int
+}
+
+// Column indexes (for the sort marker).
+const (
+	cliColAddress = iota
+	cliColName
+	cliColRSSI
+	cliColCompany
+	cliColSize
+	cliColReading
+	cliColSeen
+	cliColCount
+)
+
+var cliCols = []cliColumn{
+	{"Address", 38},
+	{"Name", 20},
+	{"RSSI", 5},
+	{"Company", 16},
+	{"Size", 8},
+	{"Reading", 26},
+	{"Seen", 7},
+}
+
+// cliSortMode is one sort order for the device list. col is the table column
+// whose header gets the bold marker (-1 for the default discovery order).
+type cliSortMode struct {
+	name string
+	col  int
+	less func(a, b *cliDevice) bool
+}
+
+var cliSortModes = []cliSortMode{
+	{name: "discovery order", col: -1},
+	{name: "address", col: cliColAddress, less: func(a, b *cliDevice) bool { return a.addr < b.addr }},
+	{name: "name", col: cliColName, less: func(a, b *cliDevice) bool {
+		return strings.ToLower(a.name) < strings.ToLower(b.name)
+	}},
+	{name: "RSSI", col: cliColRSSI, less: func(a, b *cliDevice) bool { return a.rssi > b.rssi }},
+	{name: "company", col: cliColCompany, less: func(a, b *cliDevice) bool {
+		return cliCompanies(a.companies) < cliCompanies(b.companies)
+	}},
+	{name: "reading", col: cliColReading, less: func(a, b *cliDevice) bool {
+		if (a.reading == "") != (b.reading == "") {
+			return b.reading == "" // devices with readings first
+		}
+		return a.reading > b.reading
+	}},
+	{name: "last seen", col: cliColSeen, less: func(a, b *cliDevice) bool {
+		return a.lastSeen.After(b.lastSeen)
+	}},
+}
+
 // cli messages.
 
 type scanMsg struct {
@@ -54,17 +114,18 @@ type cliTickMsg time.Time
 
 // cliDevice is one discovered device, continuously updated.
 type cliDevice struct {
-	addr       string // platform address (UUID on macOS, MAC on Linux)
-	mac        string // identity: advertiser MAC or stable pseudo MAC
-	name       string
-	rssi       int16
-	companies  []uint16 // distinct company ids seen, in order
-	reading    string   // decoded summary, "" when unknown
-	readingMAC string   // sensor MAC reported by a decoded payload (ThermoBeacon)
-	firstSeen  time.Time
-	lastSeen   time.Time
-	count      int
-	last       bluetooth.ScanResult // last advertisement, for the detail view
+	addr         string // platform address (UUID on macOS, MAC on Linux)
+	mac          string // identity: advertiser MAC or stable pseudo MAC
+	name         string
+	rssi         int16
+	companies    []uint16 // distinct company ids seen, in order
+	payloadParts []int    // payload sizes of the last advertisement's elements
+	reading      string   // decoded summary, "" when unknown
+	readingMAC   string   // sensor MAC reported by a decoded payload (ThermoBeacon)
+	firstSeen    time.Time
+	lastSeen     time.Time
+	count        int
+	last         bluetooth.ScanResult // last advertisement, for the detail view
 }
 
 // cliModel implements tea.Model (pointer receivers).
@@ -78,19 +139,25 @@ type cliModel struct {
 	table    table.Model
 	viewport viewport.Model
 	detail   bool
+	sortIdx  int // index into cliSortModes
+
+	refresh time.Duration // display refresh interval (--cli)
+	cached  string        // last rendered view; rebuilt on tick/keys only
+
+	captureWriter *capture.Writer
+	captureAddr   string
+	capturePath   string
+	captureCount  int
+	captureErr    error
 
 	width  int
 	height int
 }
 
-func newCLIModel(adapter *bluetooth.Adapter) *cliModel {
-	cols := []table.Column{
-		{Title: "Address", Width: 38},
-		{Title: "Name", Width: 20},
-		{Title: "RSSI", Width: 5},
-		{Title: "Company", Width: 16},
-		{Title: "Reading", Width: 26},
-		{Title: "Seen", Width: 7},
+func newCLIModel(adapter *bluetooth.Adapter, refresh time.Duration) *cliModel {
+	cols := make([]table.Column, len(cliCols))
+	for i, c := range cliCols {
+		cols[i] = table.Column{Title: c.title, Width: c.width}
 	}
 	t := table.New(
 		table.WithColumns(cols),
@@ -113,11 +180,22 @@ func newCLIModel(adapter *bluetooth.Adapter) *cliModel {
 		adapter: adapter,
 		devices: map[string]*cliDevice{},
 		table:   t,
+		refresh: clampRefresh(refresh),
 		// Sensible defaults until the first WindowSizeMsg arrives (real
 		// terminals send their size right away).
 		width:  100,
 		height: 30,
 	}
+}
+
+// clampRefresh keeps the display refresh interval usable: never zero (that
+// would busy-loop the renderer) and never faster than 250 ms.
+func clampRefresh(d time.Duration) time.Duration {
+	const min = 250 * time.Millisecond
+	if d < min {
+		return min
+	}
+	return d
 }
 
 // Run enables the adapter and runs the interactive TUI until the user
@@ -127,7 +205,7 @@ func newCLIModel(adapter *bluetooth.Adapter) *cliModel {
 // main thread, so the blocking adapter.Scan runs on this goroutine (the one
 // that enabled the adapter) while the Tea program runs on its own goroutine
 // and receives events through a channel.
-func Run() error {
+func Run(refresh time.Duration) error {
 	log.SetOutput(io.Discard)
 
 	adapter := bluetooth.DefaultAdapter
@@ -135,7 +213,7 @@ func Run() error {
 		return fmt.Errorf("could not enable the BLE stack: %w", err)
 	}
 
-	m := newCLIModel(adapter)
+	m := newCLIModel(adapter, refresh)
 	ch := make(chan bluetooth.ScanResult, 512)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	m.scanCh = ch
@@ -145,6 +223,7 @@ func Run() error {
 	progDone := make(chan error, 1)
 	go func() {
 		_, err := p.Run()
+		m.closeCapture()
 		adapter.StopScan()
 		progDone <- err
 	}()
@@ -172,11 +251,11 @@ func Run() error {
 
 // Init starts the refresh ticker that keeps the "Seen" column current.
 func (m *cliModel) Init() tea.Cmd {
-	return cliTick()
+	return m.cliTick()
 }
 
-func cliTick() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+func (m *cliModel) cliTick() tea.Cmd {
+	return tea.Tick(m.refresh, func(t time.Time) tea.Msg {
 		return cliTickMsg(t)
 	})
 }
@@ -186,15 +265,25 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
+		m.rebuildView()
 		return m, nil
 
 	case cliTickMsg:
 		m.refreshRows()
-		return m, cliTick()
+		m.rebuildView()
+		return m, m.cliTick()
 
 	case scanMsg:
+		// iBeacon advertisements carry no sensor data: dropped entirely.
+		if decoders.IsIBeaconAdvertisement(msg.result.ManufacturerData(), msg.result.ServiceData()) {
+			return m, nil
+		}
+		// Absorb the data now; the visible list only refreshes on the tick
+		// (or on key presses), per the -refresh interval.
 		m.updateDevice(msg.result)
-		m.refreshRows()
+		if m.captureWriter != nil && msg.result.Address.String() == m.captureAddr {
+			m.captureAdvertisement(msg.result.Address.String(), msg.result)
+		}
 		return m, nil
 
 	case tea.KeyMsg:
@@ -207,43 +296,139 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.openDetail()
 			}
-			return m, nil
+		case "c":
+			m.toggleCapture()
+		case "s":
+			m.sortIdx = (m.sortIdx + 1) % len(cliSortModes)
+			m.refreshRows()
 		case "esc":
 			m.detail = false
-			return m, nil
 		}
-		// Route navigation keys to the focused widget.
+		// Route navigation keys to the focused widget, then rebuild the
+		// cached view so every key action is visible immediately.
 		var cmd tea.Cmd
 		if m.detail {
 			m.viewport, cmd = m.viewport.Update(msg)
 		} else {
 			m.table, cmd = m.table.Update(msg)
 		}
+		m.rebuildView()
 		return m, cmd
 	}
 	return m, nil
 }
 
+// View returns the cached view, rebuilt only on ticks and key presses - so
+// the display refreshes at the -refresh interval, not per advertisement.
 func (m *cliModel) View() string {
+	if m.cached == "" {
+		m.rebuildView()
+	}
+	return m.cached
+}
+
+// rebuildView renders the current state into the cached view.
+func (m *cliModel) rebuildView() {
 	title := cliTitleStyle.Render("thermobeacon-ble-go — bluetooth devices")
 
 	var body string
 	if m.detail {
 		body = cliDetailStyle.Render(m.viewport.View())
 	} else {
-		body = m.table.View()
+		body = applySortMarker(m.table.View(), cliSortModes[m.sortIdx].col)
 	}
 
-	status := fmt.Sprintf("%d devices, %d with decoded readings, scanning",
-		len(m.order), m.decodedCount())
-	hint := "↑/↓ navigate • enter: explore payload • esc: back • q: quit • devices appear as their advertisement data changes"
+	status := fmt.Sprintf("%d devices, %d with decoded readings, scanning • sorted by %s",
+		len(m.order), m.decodedCount(), cliSortModes[m.sortIdx].name)
+	if m.captureWriter != nil {
+		status += fmt.Sprintf(" • ● capturing %s → %s (%d events)",
+			m.captureAddr, m.capturePath, m.captureCount)
+	}
+	if m.captureErr != nil {
+		status += fmt.Sprintf(" • capture error: %v", m.captureErr)
+	}
+	hint := "↑/↓ navigate • enter: explore payload • s: sort • c: capture • esc: back • q: quit • devices appear as their advertisement data changes"
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	m.cached = lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		body,
 		cliBarStyle.Render(status),
 		cliBarStyle.Render(hint),
 	)
+}
+
+// captureAdvertisement appends one advertisement to the active capture file.
+func (m *cliModel) captureAdvertisement(addr string, d bluetooth.ScanResult) {
+	if err := m.captureWriter.Write(capture.FromScanResult(d)); err != nil {
+		m.captureErr = err
+	} else {
+		m.captureCount++
+	}
+}
+
+// toggleCapture starts or stops capturing the selected device's
+// advertisements to a JSON Lines file (capture-<address>.jsonl) for replay.
+func (m *cliModel) toggleCapture() {
+	if m.captureWriter != nil {
+		m.closeCapture()
+		return
+	}
+	dev := m.selectedDevice()
+	if dev == nil {
+		return
+	}
+	path := capture.PathFor(dev.addr)
+	w, err := capture.NewWriter(path)
+	if err != nil {
+		m.captureErr = err
+		return
+	}
+	m.captureErr = nil
+	m.captureWriter = w
+	m.captureAddr = dev.addr
+	m.capturePath = path
+	m.captureCount = 0
+}
+
+// closeCapture stops an active capture and closes its file.
+func (m *cliModel) closeCapture() {
+	if m.captureWriter != nil {
+		_ = m.captureWriter.Close()
+		m.captureWriter = nil
+		m.captureAddr = ""
+		m.capturePath = ""
+	}
+}
+
+// applySortMarker bolds the header cell of the sorted column in a rendered
+// table view. The table renders each header cell as padding(0,1) around a
+// width-padded title, so the cell boundaries are known from cliCols.
+func applySortMarker(view string, col int) string {
+	if col < 0 || col >= len(cliCols) {
+		return view
+	}
+	lines := strings.SplitN(view, "\n", 3)
+	if len(lines) < 2 {
+		return view
+	}
+	header := lines[0]
+	offset := 0
+	for i, c := range cliCols {
+		start := offset
+		end := offset + c.width + 2 // padding (0, 1) per side
+		if end > len(header) {
+			return view
+		}
+		if i == col {
+			cell := header[start:end]
+			bolded := lipgloss.NewStyle().Bold(true).Render(strings.TrimRight(cell, " ")) +
+				strings.Repeat(" ", len(cell)-len(strings.TrimRight(cell, " ")))
+			lines[0] = header[:start] + bolded + header[end:]
+			return strings.Join(lines, "\n")
+		}
+		offset = end
+	}
+	return view
 }
 
 func (m *cliModel) decodedCount() int {
@@ -291,8 +476,9 @@ func (m *cliModel) upsertDevice(addr string, d bluetooth.ScanResult) {
 	if name := d.LocalName(); name != "" {
 		dev.name = name
 	}
-
+	dev.payloadParts = nil
 	for _, mfg := range d.ManufacturerData() {
+		dev.payloadParts = append(dev.payloadParts, len(mfg.Data))
 		seen := false
 		for _, id := range dev.companies {
 			if id == mfg.CompanyID {
@@ -303,6 +489,9 @@ func (m *cliModel) upsertDevice(addr string, d bluetooth.ScanResult) {
 		if !seen {
 			dev.companies = append(dev.companies, mfg.CompanyID)
 		}
+	}
+	for _, sd := range d.ServiceData() {
+		dev.payloadParts = append(dev.payloadParts, len(sd.Data))
 	}
 
 	dev.reading, dev.readingMAC = cliReading(d, dev.mac)
@@ -356,16 +545,59 @@ func readingSummary(r *sensor.Reading) string {
 	return sb.String()
 }
 
+// sortedOrder returns the device addresses in the current sort order.
+func (m *cliModel) sortedOrder() []string {
+	order := append([]string(nil), m.order...)
+	mode := cliSortModes[m.sortIdx]
+	if mode.less != nil {
+		sort.SliceStable(order, func(i, j int) bool {
+			return mode.less(m.devices[order[i]], m.devices[order[j]])
+		})
+	}
+	return order
+}
+
+// payloadSizeText renders the per-element payload sizes of an advertisement:
+// "7 B" for a single element, "7+23 B" for several, optionally with the
+// total.
+func payloadSizeText(parts []int, withTotal bool) string {
+	if len(parts) == 0 {
+		return "-"
+	}
+	strs := make([]string, len(parts))
+	total := 0
+	for i, n := range parts {
+		strs[i] = strconv.Itoa(n)
+		total += n
+	}
+	text := strings.Join(strs, "+") + " B"
+	if withTotal && len(parts) > 1 {
+		text += fmt.Sprintf(" (%d B total)", total)
+	}
+	return text
+}
+
 // refreshRows rebuilds the table rows from the device list.
+// payloadLen returns the total payload size of the last advertisement.
+func (d *cliDevice) payloadLen() int {
+	total := 0
+	for _, n := range d.payloadParts {
+		total += n
+	}
+	return total
+}
+
 func (m *cliModel) refreshRows() {
-	rows := make([]table.Row, 0, len(m.order))
-	for _, addr := range m.order {
+	order := m.sortedOrder()
+	rows := make([]table.Row, 0, len(order))
+	for _, addr := range order {
 		d := m.devices[addr]
 		rows = append(rows, table.Row{
 			d.addr,
 			orDash(d.name),
 			fmt.Sprintf("%d", d.rssi),
 			orDash(cliCompanies(d.companies)),
+			orDash(payloadSizeText(d.payloadParts, false)),
 			orDash(d.reading),
 			time.Since(d.lastSeen).Truncate(time.Second).String(),
 		})
@@ -402,6 +634,7 @@ func (m *cliModel) detailText(d *cliDevice) string {
 		row("Sensor MAC:", d.readingMAC+" (reported by the payload)")
 	}
 	row("Company:", orDash(cliCompanies(d.companies)))
+	row("Payload:", orDash(payloadSizeText(d.payloadParts, true)))
 	row("Reading:", orDash(d.reading))
 	row("RSSI:", fmt.Sprintf("%d dBm (last)", d.rssi))
 	row("Seen:", fmt.Sprintf("%d advertisements, first %s, last %s",

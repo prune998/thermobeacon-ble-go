@@ -295,7 +295,9 @@ Sensors stay in Victron's Bluetooth sensors list until they time out
 - **Govee cadence**: Govee devices fill most broadcasts with an
   INTELLI_ROCKS blob and only send measurements when the values change, so
   readings arrive in bursts every ~10-60 s. That is the device's behaviour,
-  not a fault - `dbus-ble-sensors` handles the timeout side.
+  not a fault - `dbus-ble-sensors` handles the timeout side. iBeacon-framed
+  broadcasts (the blob and real proximity beacons) are detected and skipped
+  entirely.
 - **macOS device IDs do not apply here**: the default `-device` value is a
   CoreBluetooth UUID. On the GX, always use MAC addresses or `all`.
 - **Firmware updates**: everything under `/data` survives; the `/service`

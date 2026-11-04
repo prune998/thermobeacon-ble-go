@@ -9,3 +9,4 @@ sensors.json
 # go
 *.test
 *.out
+capture-*.jsonl
