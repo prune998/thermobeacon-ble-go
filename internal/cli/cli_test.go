@@ -7,8 +7,11 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 	"github.com/prune998/thermobeacon-ble-go/internal/capture"
 	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
+	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
 	"tinygo.org/x/bluetooth"
 )
 
@@ -242,5 +245,144 @@ func TestCaptureToggle(t *testing.T) {
 	}
 	if r := capture.Decode(events[0]); r == nil || r.Temperature != 25.52 {
 		t.Errorf("captured event not decodable: %+v", r)
+	}
+}
+
+func TestCLISortCycling(t *testing.T) {
+	m := newCLIModel(nil)
+
+	// Insert devices in "wrong" order for every sort key.
+	devices := map[string]struct {
+		addr, name string
+		rssi       int16
+	}{
+		"c0:ff:ee:00:00:01": {"c0:ff:ee:00:00:01", "Zulu", -30},
+		"aa:bb:cc:dd:ee:01": {"aa:bb:cc:dd:ee:01", "Alpha", -70},
+		"bb:cc:dd:ee:ff:02": {"bb:cc:dd:ee:ff:02", "Mike", -50},
+	}
+	keys := []string{"c0:ff:ee:00:00:01", "aa:bb:cc:dd:ee:01", "bb:cc:dd:ee:ff:02"}
+	for _, k := range keys {
+		d := devices[k]
+		res := bluetooth.ScanResult{
+			RSSI: d.rssi,
+			AdvertisementPayload: &fakePayload{
+				name: d.name,
+				mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0x0053, Data: []byte{0x01}}},
+			},
+		}
+		res.Address.Set(k)
+		m.upsertDevice(sensor.SenderMAC(k), res)
+	}
+
+	// discovery order (default): insertion order
+	got := m.sortedOrder()
+	want := []string{"c0:ff:ee:00:00:01", "aa:bb:cc:dd:ee:01", "bb:cc:dd:ee:ff:02"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("discovery order = %v, want %v", got, want)
+		}
+	}
+
+	// address sort
+	m.sortIdx = 1 // address
+	got = m.sortedOrder()
+	if !strings.HasPrefix(got[0], "aa:") || !strings.HasPrefix(got[2], "c0:") {
+		t.Errorf("address order = %v", got)
+	}
+
+	// name sort: Alpha, Mike, Zulu
+	m.sortIdx = 2
+	got = m.sortedOrder()
+	if len(got) != 3 {
+		t.Fatalf("order = %v", got)
+	}
+	names := []string{
+		m.devices[got[0]].name, m.devices[got[1]].name, m.devices[got[2]].name,
+	}
+	if !strings.EqualFold(strings.Join(names, ","), "Alpha,Mike,Zulu") {
+		t.Errorf("name order = %v", names)
+	}
+
+	// RSSI sort: strongest first (-30, -50, -70)
+	m.sortIdx = 3
+	got = m.sortedOrder()
+	rssis := []int16{
+		m.devices[got[0]].rssi, m.devices[got[1]].rssi, m.devices[got[2]].rssi,
+	}
+	if rssis[0] != -30 || rssis[1] != -50 || rssis[2] != -70 {
+		t.Errorf("rssi order = %v", rssis)
+	}
+
+	// cycling wraps back to discovery order
+	m.sortIdx = (m.sortIdx + 1) % len(cliSortModes) // company
+	m.sortIdx = (m.sortIdx + 1) % len(cliSortModes) // reading
+	m.sortIdx = (m.sortIdx + 1) % len(cliSortModes) // last seen
+	m.sortIdx = (m.sortIdx + 1) % len(cliSortModes) // wraps to discovery
+	if m.sortIdx != 0 {
+		t.Errorf("sortIdx = %d, want 0 after wrapping", m.sortIdx)
+	}
+	if got = m.sortedOrder(); got[0] != "c0:ff:ee:00:00:01" {
+		t.Errorf("wrapped order = %v", got)
+	}
+}
+
+func TestCLISortHeaderMarker(t *testing.T) {
+	// force a color profile so the bold marker survives rendering (tests run
+	// without a TTY, where lipgloss would strip all ANSI)
+	r := lipgloss.DefaultRenderer()
+	oldProfile := r.ColorProfile()
+	r.SetColorProfile(termenv.TrueColor)
+	defer r.SetColorProfile(oldProfile)
+
+	m := newCLIModel(nil)
+	m.width, m.height = 140, 40
+	m.resize()
+	res := bluetooth.ScanResult{
+		RSSI: -50,
+		AdvertisementPayload: &fakePayload{
+			name: "Govee_H5074_88DE",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
+		},
+	}
+	m.upsertDevice(addrFixture, res)
+	m.refreshRows()
+
+	// discovery order: no bold marker in the header
+	view := m.View()
+	headerLine := ""
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Address") && strings.Contains(line, "Reading") {
+			headerLine = line
+			break
+		}
+	}
+	if headerLine == "" {
+		t.Fatal("table header not found in view")
+	}
+	if strings.Contains(headerLine, "\x1b[1m") {
+		t.Errorf("header bolded without a column sort:\n%s", headerLine)
+	}
+
+	// RSSI sort: the RSSI header cell is bold
+	m.sortIdx = 3 // RSSI
+	view = m.View()
+	headerLine = ""
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Address") && strings.Contains(line, "Reading") {
+			headerLine = line
+			break
+		}
+	}
+	if !strings.Contains(headerLine, "\x1b[1m") {
+		t.Errorf("sorted header cell not bold:\n%s", headerLine)
+	}
+	stripped := ansiRe.ReplaceAllString(headerLine, "")
+	if !strings.Contains(stripped, "RSSI") {
+		t.Errorf("bold cell is not the RSSI column:\n%s", stripped)
+	}
+
+	// the status line announces the active sort
+	if !strings.Contains(view, "sorted by RSSI") {
+		t.Errorf("status line missing the sort announcement")
 	}
 }

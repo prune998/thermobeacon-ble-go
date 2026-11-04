@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,6 +46,61 @@ var (
 			Bold(true)
 )
 
+// cliColumn is one column of the device table.
+type cliColumn struct {
+	title string
+	width int
+}
+
+// Column indexes (for the sort marker).
+const (
+	cliColAddress = iota
+	cliColName
+	cliColRSSI
+	cliColCompany
+	cliColReading
+	cliColSeen
+	cliColCount
+)
+
+var cliCols = []cliColumn{
+	{"Address", 38},
+	{"Name", 20},
+	{"RSSI", 5},
+	{"Company", 16},
+	{"Reading", 26},
+	{"Seen", 7},
+}
+
+// cliSortMode is one sort order for the device list. col is the table column
+// whose header gets the bold marker (-1 for the default discovery order).
+type cliSortMode struct {
+	name string
+	col  int
+	less func(a, b *cliDevice) bool
+}
+
+var cliSortModes = []cliSortMode{
+	{name: "discovery order", col: -1},
+	{name: "address", col: cliColAddress, less: func(a, b *cliDevice) bool { return a.addr < b.addr }},
+	{name: "name", col: cliColName, less: func(a, b *cliDevice) bool {
+		return strings.ToLower(a.name) < strings.ToLower(b.name)
+	}},
+	{name: "RSSI", col: cliColRSSI, less: func(a, b *cliDevice) bool { return a.rssi > b.rssi }},
+	{name: "company", col: cliColCompany, less: func(a, b *cliDevice) bool {
+		return cliCompanies(a.companies) < cliCompanies(b.companies)
+	}},
+	{name: "reading", col: cliColReading, less: func(a, b *cliDevice) bool {
+		if (a.reading == "") != (b.reading == "") {
+			return b.reading == "" // devices with readings first
+		}
+		return a.reading > b.reading
+	}},
+	{name: "last seen", col: cliColSeen, less: func(a, b *cliDevice) bool {
+		return a.lastSeen.After(b.lastSeen)
+	}},
+}
+
 // cli messages.
 
 type scanMsg struct {
@@ -79,6 +135,7 @@ type cliModel struct {
 	table    table.Model
 	viewport viewport.Model
 	detail   bool
+	sortIdx  int // index into cliSortModes
 
 	captureWriter *capture.Writer
 	captureAddr   string
@@ -91,13 +148,9 @@ type cliModel struct {
 }
 
 func newCLIModel(adapter *bluetooth.Adapter) *cliModel {
-	cols := []table.Column{
-		{Title: "Address", Width: 38},
-		{Title: "Name", Width: 20},
-		{Title: "RSSI", Width: 5},
-		{Title: "Company", Width: 16},
-		{Title: "Reading", Width: 26},
-		{Title: "Seen", Width: 7},
+	cols := make([]table.Column, len(cliCols))
+	for i, c := range cliCols {
+		cols[i] = table.Column{Title: c.title, Width: c.width}
 	}
 	t := table.New(
 		table.WithColumns(cols),
@@ -222,6 +275,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "c":
 			m.toggleCapture()
 			return m, nil
+		case "s":
+			m.sortIdx = (m.sortIdx + 1) % len(cliSortModes)
+			m.refreshRows()
+			return m, nil
 		case "esc":
 			m.detail = false
 			return m, nil
@@ -245,11 +302,11 @@ func (m *cliModel) View() string {
 	if m.detail {
 		body = cliDetailStyle.Render(m.viewport.View())
 	} else {
-		body = m.table.View()
+		body = applySortMarker(m.table.View(), cliSortModes[m.sortIdx].col)
 	}
 
-	status := fmt.Sprintf("%d devices, %d with decoded readings, scanning",
-		len(m.order), m.decodedCount())
+	status := fmt.Sprintf("%d devices, %d with decoded readings, scanning • sorted by %s",
+		len(m.order), m.decodedCount(), cliSortModes[m.sortIdx].name)
 	if m.captureWriter != nil {
 		status += fmt.Sprintf(" • ● capturing %s → %s (%d events)",
 			m.captureAddr, m.capturePath, m.captureCount)
@@ -257,7 +314,7 @@ func (m *cliModel) View() string {
 	if m.captureErr != nil {
 		status += fmt.Sprintf(" • capture error: %v", m.captureErr)
 	}
-	hint := "↑/↓ navigate • enter: explore payload • c: capture device • esc: back • q: quit • devices appear as their advertisement data changes"
+	hint := "↑/↓ navigate • enter: explore payload • s: sort • c: capture • esc: back • q: quit • devices appear as their advertisement data changes"
 
 	return lipgloss.JoinVertical(lipgloss.Left,
 		title,
@@ -308,6 +365,37 @@ func (m *cliModel) closeCapture() {
 		m.captureAddr = ""
 		m.capturePath = ""
 	}
+}
+
+// applySortMarker bolds the header cell of the sorted column in a rendered
+// table view. The table renders each header cell as padding(0,1) around a
+// width-padded title, so the cell boundaries are known from cliCols.
+func applySortMarker(view string, col int) string {
+	if col < 0 || col >= len(cliCols) {
+		return view
+	}
+	lines := strings.SplitN(view, "\n", 3)
+	if len(lines) < 2 {
+		return view
+	}
+	header := lines[0]
+	offset := 0
+	for i, c := range cliCols {
+		start := offset
+		end := offset + c.width + 2 // padding (0, 1) per side
+		if end > len(header) {
+			return view
+		}
+		if i == col {
+			cell := header[start:end]
+			bolded := lipgloss.NewStyle().Bold(true).Render(strings.TrimRight(cell, " ")) +
+				strings.Repeat(" ", len(cell)-len(strings.TrimRight(cell, " ")))
+			lines[0] = header[:start] + bolded + header[end:]
+			return strings.Join(lines, "\n")
+		}
+		offset = end
+	}
+	return view
 }
 
 func (m *cliModel) decodedCount() int {
@@ -420,10 +508,23 @@ func readingSummary(r *sensor.Reading) string {
 	return sb.String()
 }
 
+// sortedOrder returns the device addresses in the current sort order.
+func (m *cliModel) sortedOrder() []string {
+	order := append([]string(nil), m.order...)
+	mode := cliSortModes[m.sortIdx]
+	if mode.less != nil {
+		sort.SliceStable(order, func(i, j int) bool {
+			return mode.less(m.devices[order[i]], m.devices[order[j]])
+		})
+	}
+	return order
+}
+
 // refreshRows rebuilds the table rows from the device list.
 func (m *cliModel) refreshRows() {
-	rows := make([]table.Row, 0, len(m.order))
-	for _, addr := range m.order {
+	order := m.sortedOrder()
+	rows := make([]table.Row, 0, len(order))
+	for _, addr := range order {
 		d := m.devices[addr]
 		rows = append(rows, table.Row{
 			d.addr,

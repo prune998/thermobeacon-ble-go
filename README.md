@@ -133,8 +133,11 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 Bluetooth device in range as it is discovered — address, name, RSSI, company
 ids and decoded readings (ThermoBeacon / Govee / BTHome). Navigate with the
 arrow keys, press **enter** to explore the last advertisement of the selected
-device (identity incl. MAC address, full hex dump and field breakdown), **esc**
-to go back, **q** to quit. Nothing is forwarded in this mode.
+device (identity incl. MAC address, full hex dump and field breakdown), **s**
+to cycle the list sort (address, name, RSSI, company, reading, last seen —
+the sorted column is marked bold in the header), **c** to capture the selected
+device's frames to a file, **esc** to go back, **q** to quit. Nothing is
+forwarded in this mode.
 
 ```
  thermb   ─ bluetooth devices
