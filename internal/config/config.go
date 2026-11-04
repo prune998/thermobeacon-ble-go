@@ -27,6 +27,7 @@ type Config struct {
 	NoForward   bool
 	CLI         bool
 	Capture     string
+	Refresh     time.Duration // TUI display refresh interval (--cli)
 	MinInterval time.Duration
 	IdleWarning time.Duration
 	Debug       bool

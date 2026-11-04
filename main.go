@@ -50,6 +50,8 @@ func main() {
 		"append every matching advertisement to this file as JSON lines (replayable with the replay subcommand)")
 	flag.BoolVar(&cfg.CLI, "cli", false,
 		"interactive TUI: browse discovered devices, get their MAC addresses and explore the payloads (no forwarding)")
+	flag.DurationVar(&cfg.Refresh, "refresh", time.Second,
+		"--cli only: refresh the device list only after this interval")
 	flag.DurationVar(&cfg.MinInterval, "min-interval", 5*time.Second,
 		"at most one forwarded packet per sensor every N seconds")
 	flag.DurationVar(&cfg.IdleWarning, "idle-warning", 120*time.Second,
@@ -102,7 +104,7 @@ Flags:
 		os.Exit(2)
 	}
 	if cfg.CLI {
-		if err := cli.Run(); err != nil {
+		if err := cli.Run(cfg.Refresh); err != nil {
 			log.Fatal(err)
 		}
 		return

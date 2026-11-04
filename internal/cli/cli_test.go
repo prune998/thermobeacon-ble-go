@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -101,7 +102,7 @@ func TestCLIReadingSummary(t *testing.T) {
 }
 
 func TestCLIUpdateDevice(t *testing.T) {
-	m := newCLIModel(nil)
+	m := newCLIModel(nil, time.Second)
 
 	res := bluetooth.ScanResult{
 		RSSI: -50,
@@ -159,7 +160,7 @@ func TestCLICompaniesAndDetail(t *testing.T) {
 		t.Errorf("cliCompanies truncation = %q", got)
 	}
 
-	m := newCLIModel(nil)
+	m := newCLIModel(nil, time.Second)
 	res := bluetooth.ScanResult{
 		RSSI: -50,
 		AdvertisementPayload: &fakePayload{
@@ -193,7 +194,7 @@ func TestCaptureToggle(t *testing.T) {
 	}
 	defer os.Chdir(oldWd)
 
-	m := newCLIModel(nil)
+	m := newCLIModel(nil, time.Second)
 	res := bluetooth.ScanResult{
 		RSSI: -50,
 		AdvertisementPayload: &fakePayload{
@@ -249,7 +250,7 @@ func TestCaptureToggle(t *testing.T) {
 }
 
 func TestCLISortCycling(t *testing.T) {
-	m := newCLIModel(nil)
+	m := newCLIModel(nil, time.Second)
 
 	// Insert devices in "wrong" order for every sort key.
 	devices := map[string]struct {
@@ -334,7 +335,7 @@ func TestCLISortHeaderMarker(t *testing.T) {
 	r.SetColorProfile(termenv.TrueColor)
 	defer r.SetColorProfile(oldProfile)
 
-	m := newCLIModel(nil)
+	m := newCLIModel(nil, time.Second)
 	m.width, m.height = 140, 40
 	m.resize()
 	res := bluetooth.ScanResult{
@@ -364,7 +365,8 @@ func TestCLISortHeaderMarker(t *testing.T) {
 	}
 
 	// RSSI sort: the RSSI header cell is bold
-	m.sortIdx = 3 // RSSI
+	m.sortIdx = 3   // RSSI
+	m.rebuildView() // a key press or tick would rebuild the cached view
 	view = m.View()
 	headerLine = ""
 	for _, line := range strings.Split(view, "\n") {
@@ -384,5 +386,91 @@ func TestCLISortHeaderMarker(t *testing.T) {
 	// the status line announces the active sort
 	if !strings.Contains(view, "sorted by RSSI") {
 		t.Errorf("status line missing the sort announcement")
+	}
+}
+
+func TestCLIRefreshClamp(t *testing.T) {
+	if got := clampRefresh(0); got != 250*time.Millisecond {
+		t.Errorf("clampRefresh(0) = %v, want 250ms", got)
+	}
+	if got := clampRefresh(-5 * time.Second); got != 250*time.Millisecond {
+		t.Errorf("clampRefresh(-5s) = %v, want 250ms", got)
+	}
+	if got := clampRefresh(100 * time.Millisecond); got != 250*time.Millisecond {
+		t.Errorf("clampRefresh(100ms) = %v, want 250ms (floor)", got)
+	}
+	if got := clampRefresh(5 * time.Second); got != 5*time.Second {
+		t.Errorf("clampRefresh(5s) = %v, want 5s", got)
+	}
+}
+
+// With a long refresh interval, new devices are absorbed into the data but
+// the displayed view only updates on the tick.
+// With a long refresh interval, new devices are absorbed into the data but
+// the displayed view only updates on the tick.
+func TestCLIRefreshThrottle(t *testing.T) {
+	m := newCLIModel(nil, time.Hour) // effectively never ticks
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	res := bluetooth.ScanResult{
+		RSSI: -50,
+		AdvertisementPayload: &fakePayload{
+			name: "Govee_H5074_88DE",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
+		},
+	}
+	m.upsertDevice(addrFixture, res)
+	m.refreshRows()
+	m.rebuildView()
+
+	if !strings.Contains(m.View(), "Govee_H5074_88DE") {
+		t.Fatal("initial view missing the device")
+	}
+
+	// a second device arrives via scanMsg: absorbed into the data, but the
+	// displayed view stays stale until the tick
+	res2 := bluetooth.ScanResult{
+		RSSI: -60,
+		AdvertisementPayload: &fakePayload{
+			name: "SecondDevice",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0x0059, Data: []byte{0x01}}},
+		},
+	}
+	m.Update(scanMsg{result: res2})
+	if strings.Contains(m.View(), "SecondDevice") {
+		t.Error("view refreshed before the tick")
+	}
+
+	// the tick rebuilds the view
+	m.Update(cliTickMsg(time.Now()))
+	if !strings.Contains(m.View(), "SecondDevice") {
+		t.Error("view not refreshed after the tick")
+	}
+	if !strings.Contains(m.View(), "2 devices, 1 with decoded readings") {
+		t.Errorf("status not updated:\n%s", m.View())
+	}
+}
+
+// Key presses always rebuild the view immediately, regardless of the refresh
+// interval.
+func TestCLIRefreshImmediateOnKey(t *testing.T) {
+	m := newCLIModel(nil, time.Hour)
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+
+	res := bluetooth.ScanResult{
+		RSSI: -50,
+		AdvertisementPayload: &fakePayload{
+			name: "Govee_H5074_88DE",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
+		},
+	}
+	m.upsertDevice(addrFixture, res)
+	m.refreshRows()
+	m.rebuildView()
+
+	// opening the detail view renders immediately
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "last advertisement") {
+		t.Errorf("detail view not rendered immediately on key press; view:\n%s", ansiRe.ReplaceAllString(m.View(), ""))
 	}
 }

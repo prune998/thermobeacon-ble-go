@@ -137,6 +137,9 @@ type cliModel struct {
 	detail   bool
 	sortIdx  int // index into cliSortModes
 
+	refresh time.Duration // display refresh interval (--cli)
+	cached  string        // last rendered view; rebuilt on tick/keys only
+
 	captureWriter *capture.Writer
 	captureAddr   string
 	capturePath   string
@@ -147,7 +150,7 @@ type cliModel struct {
 	height int
 }
 
-func newCLIModel(adapter *bluetooth.Adapter) *cliModel {
+func newCLIModel(adapter *bluetooth.Adapter, refresh time.Duration) *cliModel {
 	cols := make([]table.Column, len(cliCols))
 	for i, c := range cliCols {
 		cols[i] = table.Column{Title: c.title, Width: c.width}
@@ -173,11 +176,22 @@ func newCLIModel(adapter *bluetooth.Adapter) *cliModel {
 		adapter: adapter,
 		devices: map[string]*cliDevice{},
 		table:   t,
+		refresh: clampRefresh(refresh),
 		// Sensible defaults until the first WindowSizeMsg arrives (real
 		// terminals send their size right away).
 		width:  100,
 		height: 30,
 	}
+}
+
+// clampRefresh keeps the display refresh interval usable: never zero (that
+// would busy-loop the renderer) and never faster than 250 ms.
+func clampRefresh(d time.Duration) time.Duration {
+	const min = 250 * time.Millisecond
+	if d < min {
+		return min
+	}
+	return d
 }
 
 // Run enables the adapter and runs the interactive TUI until the user
@@ -187,7 +201,7 @@ func newCLIModel(adapter *bluetooth.Adapter) *cliModel {
 // main thread, so the blocking adapter.Scan runs on this goroutine (the one
 // that enabled the adapter) while the Tea program runs on its own goroutine
 // and receives events through a channel.
-func Run() error {
+func Run(refresh time.Duration) error {
 	log.SetOutput(io.Discard)
 
 	adapter := bluetooth.DefaultAdapter
@@ -195,7 +209,7 @@ func Run() error {
 		return fmt.Errorf("could not enable the BLE stack: %w", err)
 	}
 
-	m := newCLIModel(adapter)
+	m := newCLIModel(adapter, refresh)
 	ch := make(chan bluetooth.ScanResult, 512)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	m.scanCh = ch
@@ -233,11 +247,11 @@ func Run() error {
 
 // Init starts the refresh ticker that keeps the "Seen" column current.
 func (m *cliModel) Init() tea.Cmd {
-	return cliTick()
+	return m.cliTick()
 }
 
-func cliTick() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+func (m *cliModel) cliTick() tea.Cmd {
+	return tea.Tick(m.refresh, func(t time.Time) tea.Msg {
 		return cliTickMsg(t)
 	})
 }
@@ -247,18 +261,21 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.resize()
+		m.rebuildView()
 		return m, nil
 
 	case cliTickMsg:
 		m.refreshRows()
-		return m, cliTick()
+		m.rebuildView()
+		return m, m.cliTick()
 
 	case scanMsg:
+		// Absorb the data now; the visible list only refreshes on the tick
+		// (or on key presses), per the -refresh interval.
 		m.updateDevice(msg.result)
 		if m.captureWriter != nil && msg.result.Address.String() == m.captureAddr {
 			m.captureAdvertisement(msg.result.Address.String(), msg.result)
 		}
-		m.refreshRows()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -271,31 +288,39 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.openDetail()
 			}
-			return m, nil
 		case "c":
 			m.toggleCapture()
-			return m, nil
 		case "s":
 			m.sortIdx = (m.sortIdx + 1) % len(cliSortModes)
 			m.refreshRows()
-			return m, nil
 		case "esc":
 			m.detail = false
-			return m, nil
 		}
-		// Route navigation keys to the focused widget.
+		// Route navigation keys to the focused widget, then rebuild the
+		// cached view so every key action is visible immediately.
 		var cmd tea.Cmd
 		if m.detail {
 			m.viewport, cmd = m.viewport.Update(msg)
 		} else {
 			m.table, cmd = m.table.Update(msg)
 		}
+		m.rebuildView()
 		return m, cmd
 	}
 	return m, nil
 }
 
+// View returns the cached view, rebuilt only on ticks and key presses - so
+// the display refreshes at the -refresh interval, not per advertisement.
 func (m *cliModel) View() string {
+	if m.cached == "" {
+		m.rebuildView()
+	}
+	return m.cached
+}
+
+// rebuildView renders the current state into the cached view.
+func (m *cliModel) rebuildView() {
 	title := cliTitleStyle.Render("thermobeacon-ble-go — bluetooth devices")
 
 	var body string
@@ -316,7 +341,7 @@ func (m *cliModel) View() string {
 	}
 	hint := "↑/↓ navigate • enter: explore payload • s: sort • c: capture • esc: back • q: quit • devices appear as their advertisement data changes"
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	m.cached = lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		body,
 		cliBarStyle.Render(status),

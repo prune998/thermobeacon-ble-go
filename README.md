@@ -120,6 +120,7 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 | `-udp-host` / `-udp-port` | `127.0.0.1` / `18542` | dbus-ble-sensors UDP gateway socket |
 | `-no-forward` | off | decode and log only, never send UDP packets |
 | `-cli` | off | interactive TUI: browse devices, get MAC addresses, explore payloads (no forwarding) |
+| `-refresh <dur>` | `1s` | `--cli` only: refresh the device list only after this interval (min 250ms) |
 | `-capture <file>` | off | append every matching advertisement to a JSON Lines file (replayable) |
 | `-min-interval` | `5s` | at most one forwarded packet per sensor every N seconds |
 | `-idle-warning` | `2m` | warn when no BLE advertisement at all was seen for N seconds |
@@ -151,7 +152,9 @@ forwarded in this mode.
 
 macOS coalesces identical advertisements, so devices appear when their
 advertisement data changes — a device with static content shows up once; Govee
-sensors surface their measurement frame whenever the values change.
+sensors surface their measurement frame whenever the values change. Use
+`-refresh 5s` (for example) to slow the display down further: new readings are
+absorbed immediately but the list only redraws on the interval.
 
 ### Capturing payloads for new device support
 
