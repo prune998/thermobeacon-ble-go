@@ -41,6 +41,8 @@ func Replay(path string) error {
 		r := Decode(e)
 		if r == nil {
 			switch {
+			case e.IsIBeacon():
+				fmt.Println("  -> iBeacon advertisement (skipped)")
 			case len(e.ManufacturerData) == 0 && len(e.ServiceData) == 0:
 				fmt.Println("  -> empty advertisement (no manufacturer or service data)")
 			case appleOnly(e.ManufacturerData) && len(e.ServiceData) == 0:

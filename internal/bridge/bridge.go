@@ -134,6 +134,14 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 		return
 	}
 
+	// iBeacon advertisements (Apple proximity beacons, including the
+	// INTELLI_ROCKS frames Govee devices emit) carry no sensor data: skip
+	// them entirely - not captured, not dumped, not decoded.
+	if decoders.IsIBeaconAdvertisement(device.ManufacturerData(), device.ServiceData()) {
+		logging.Debugf("%s iBeacon advertisement - skipped", addr)
+		return
+	}
+
 	// Capture mode: append the raw advertisement for later replay.
 	if b.capture != nil {
 		if err := b.capture.Write(capture.FromScanResult(device)); err != nil {

@@ -137,6 +137,9 @@ func (p *replayPayload) ServiceData() []bluetooth.ServiceDataElement {
 // precedence as the bridge (ThermoBeacon, then Govee, then BTHome). Returns
 // nil when no decoder accepts the frame.
 func Decode(e Event) *sensor.Reading {
+	if e.IsIBeacon() {
+		return nil
+	}
 	for _, m := range e.ManufacturerData {
 		if m.CompanyID == decoders.CompanyIDApple {
 			// Apple's company id: the INTELLI_ROCKS blob some Govee
@@ -181,6 +184,28 @@ func PathFor(addr string) string {
 	}
 	sb.WriteString(".jsonl")
 	return sb.String()
+}
+
+// IsIBeacon reports whether the event only carries iBeacon data (Apple
+// company id elements, at least one an actual iBeacon frame).
+func (e Event) IsIBeacon() bool {
+	if len(e.ServiceData) > 0 || len(e.ManufacturerData) == 0 {
+		return false
+	}
+	saw := false
+	for _, m := range e.ManufacturerData {
+		if m.CompanyID != decoders.CompanyIDApple {
+			return false
+		}
+		data, err := hex.DecodeString(m.Data)
+		if err != nil {
+			return false
+		}
+		if decoders.IsIBeacon(m.CompanyID, data) {
+			saw = true
+		}
+	}
+	return saw
 }
 
 // Writer appends events to a JSON Lines capture file. Safe for concurrent

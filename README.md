@@ -132,13 +132,16 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 `./thermobeacon-ble-go --cli` opens a terminal UI (built with
 [Charm Bubble Tea](https://github.com/charmbracelet/bubbletea)) that lists every
 Bluetooth device in range as it is discovered — address, name, RSSI, company
-ids and decoded readings (ThermoBeacon / Govee / BTHome). Navigate with the
+ids, payload size and decoded readings (ThermoBeacon / Govee / BTHome).
+Navigate with the
 arrow keys, press **enter** to explore the last advertisement of the selected
 device (identity incl. MAC address, full hex dump and field breakdown), **s**
 to cycle the list sort (address, name, RSSI, company, reading, last seen —
 the sorted column is marked bold in the header), **c** to capture the selected
 device's frames to a file, **esc** to go back, **q** to quit. Nothing is
-forwarded in this mode.
+forwarded in this mode. iBeacon advertisements (Apple proximity beacons,
+including the INTELLI_ROCKS frames Govee devices emit) are detected and
+dropped entirely — they carry no sensor data.
 
 ```
  thermb   ─ bluetooth devices

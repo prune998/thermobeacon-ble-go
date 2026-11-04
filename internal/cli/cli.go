@@ -274,6 +274,10 @@ func (m *cliModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.cliTick()
 
 	case scanMsg:
+		// iBeacon advertisements carry no sensor data: dropped entirely.
+		if decoders.IsIBeaconAdvertisement(msg.result.ManufacturerData(), msg.result.ServiceData()) {
+			return m, nil
+		}
 		// Absorb the data now; the visible list only refreshes on the tick
 		// (or on key presses), per the -refresh interval.
 		m.updateDevice(msg.result)

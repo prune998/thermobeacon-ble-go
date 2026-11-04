@@ -34,6 +34,15 @@ var goveeIntelliRocksBlob = []byte{
 
 var sampleThermoBeacon = []byte{0x80, 0x00, 0x21, 0x0F, 0xA0, 0x8D, 0x5C, 0xDB, 0x40, 0x0B, 0x34, 0x01, 0xA0, 0x03, 0x0F, 0x87, 0x20, 0x00}
 
+// ibeaconFixture: classic example iBeacon payload (type 02, length 15,
+// proximity UUID, major 1, minor 2, measured TX power -59).
+var ibeaconFixture = []byte{
+	0x02, 0x15,
+	0xE2, 0xC5, 0x6D, 0xB5, 0xDF, 0xFB, 0x48, 0xD2,
+	0xB0, 0x60, 0xD0, 0xF5, 0xA7, 0x10, 0x96, 0xE6,
+	0x00, 0x01, 0x00, 0x02, 0xC5,
+}
+
 var goveeRealH5074 = []byte{0x00, 0xF8, 0x09, 0x9F, 0x1C, 0x64, 0x02}
 
 var sampleBTHome = []byte{
@@ -480,6 +489,34 @@ func TestCLIRefreshImmediateOnKey(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(m.View(), "last advertisement") {
 		t.Errorf("detail view not rendered immediately on key press; view:\n%s", ansiRe.ReplaceAllString(m.View(), ""))
+	}
+}
+
+func TestCLISkipsIBeacon(t *testing.T) {
+	m := newCLIModel(nil, time.Second)
+	ibeacon := bluetooth.ScanResult{
+		RSSI: -60,
+		AdvertisementPayload: &fakePayload{
+			name: "Proximity Beacon",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0x004C, Data: ibeaconFixture}},
+		},
+	}
+	m.Update(scanMsg{result: ibeacon})
+	if len(m.order) != 0 {
+		t.Errorf("iBeacon tracked as a device: %v", m.order)
+	}
+
+	// a real sensor right after is unaffected
+	res := bluetooth.ScanResult{
+		RSSI: -50,
+		AdvertisementPayload: &fakePayload{
+			name: "Govee_H5074_88DE",
+			mfg:  []bluetooth.ManufacturerDataElement{{CompanyID: 0xEC88, Data: goveeRealH5074}},
+		},
+	}
+	m.Update(scanMsg{result: res})
+	if len(m.order) != 1 {
+		t.Errorf("device list has %d entries, want 1", len(m.order))
 	}
 }
 
