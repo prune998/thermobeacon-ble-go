@@ -31,3 +31,14 @@ func BenchmarkAcceptsDeviceMACFilterReject(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkAcceptsDeviceListFilterReject(b *testing.B) {
+	c := &Config{Device: "aa:bb:cc:dd:ee:01, aa:bb:cc:dd:ee:02, 10243784-1324-5413-b00c-9675981a8daa"}
+	addr := "aa:bb:cc:dd:ee:ff"
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if c.AcceptsDevice(addr) {
+			b.Fatal("unexpected accept")
+		}
+	}
+}

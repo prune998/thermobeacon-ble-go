@@ -41,7 +41,7 @@ func main() {
 	)
 
 	flag.StringVar(&cfg.Device, "device", config.DefaultDeviceID,
-		"device to follow: a CoreBluetooth UUID (macOS), a MAC address (Linux) or 'all'")
+		"device(s) to follow: a comma-separated list of CoreBluetooth UUIDs (macOS) and/or MAC addresses (Linux), or 'all'")
 	flag.StringVar(&cfg.UDPHost, "udp-host", "127.0.0.1",
 		"host of Victron's dbus-ble-sensors UDP gateway socket")
 	flag.IntVar(&cfg.UDPPort, "udp-port", 18542,

@@ -155,7 +155,8 @@ a macOS UUID and is useless here):
 
 `-device all` forwards every supported sensor; a comma-free alternative is to
 keep `all` and use Victron's own enable/ignore switches in the GUI. To pin
-individual sensors, use `-device <mac>` (one MAC) - see the README flags.
+individual sensors, use `-device <mac>` or a comma-separated list
+(`-device <mac1>,<mac2>`) - see the README flags.
 
 Govee sensors only broadcast measurements when their values change, so give
 it a minute. Ctrl-C when you have what you need.
@@ -191,8 +192,8 @@ chmod +x /data/drivers/thermobeacon-ble-go/bin/service/run \
 
 Notes:
 
-- `-device`: one MAC per app instance (run a second service with another
-  `run` script for more), or `all`.
+- `-device`: a comma-separated list of MACs (mixed with `all` if you like), or
+  `all`.
 - `-state` points into `/data` so the seen-sensor record survives reboots.
 - `2>&1` sends the app's log output to the log service (rotated: 4 × 25 kB).
 
@@ -237,13 +238,59 @@ svstat /service/thermobeacon-ble-go
 
 ## Step 5 - enable the sensors in the GUI
 
-- Settings → Integrations → **Bluetooth sensors**: each sensor appears
-  (initially as *RuuviTag*) and is **disabled** - enable the ones that are
-  yours. Foreign sensors in range stay disabled and never show up anywhere.
+The readings reach Venus OS through its own *Bluetooth sensors* service; the
+switches live in the GUI (GX display, GX Touch or Remote Console). The
+screenshots below are from a Cerbo GX running Venus OS v3.85+.
+
+**1. Enable the service and your sensors**
+
+Settings → **Integrations**:
+
+![Venus OS Settings: open Integrations](assets/1-settings.png)
+
+then **Bluetooth Sensors**:
+
+![Settings → Integrations → Bluetooth Sensors](assets/2-integration.png)
+
+Leave *Enable* on - it runs `dbus-ble-sensors`, whose UDP gateway socket the
+app forwards to. Every sensor in range is listed as `Ruuvi` + the **4 last
+characters of its MAC address** (`Ruuvi 88DE` is MAC `xx:xx:xx:xx:88:de`);
+run `thermobeacon-ble-go -cli` (or `dump`) on your computer to match a
+physical sensor to its address. Sensors start **disabled** - flip on the
+ones that are yours. Disabled sensors never show up anywhere, so foreign
+devices in range stay invisible (sensors appear in this list as soon as the
+service from step 3/4 forwards their packets, and drop off 30 minutes after
+their last packet):
+
+![Bluetooth Sensors: sensors are named after the last 4 MAC characters and start disabled](assets/3-sensors.png)
+
+**2. Check the readings and rename the sensors**
+
+Enabled sensors appear in the device list: Settings → **Devices**:
+
+![Venus OS Settings: open Devices](assets/4-devices.png)
+
+All of them are listed as *RuuviTag* - every BLE sensor wears the name of the
+product it emulates. Click the entry to open it:
+
+![Devices: every BLE sensor appears as RuuviTag](assets/5-device.png)
+
+The device page shows Status, Temperature, Humidity and Sensor battery. Open
+**Device** to rename the sensor:
+
+![RuuviTag device page: readings and sensor battery](assets/6-ruuvi.png)
+
+Type a custom name in the *Name* field and hit enter:
+
+![Device page: type a custom name](assets/7-set-name.png)
+
+The name sticks everywhere - device list, VRM, Node-RED:
+
+![Device page: sensor renamed to GOVEE 2](assets/8-name-changed.png)
+
 - Renaming in the GUI sticks; the app never touches names.
-- Enabled sensors appear in the device list, on VRM and in Node-RED with
-  `/Temperature`, `/Humidity`, `/BatteryVoltage`, `/Connected` and the
-  low-battery alarm.
+- Enabled sensors appear on VRM and in Node-RED with `/Temperature`,
+  `/Humidity`, `/BatteryVoltage`, `/Connected` and the low-battery alarm.
 
 Useful commands afterwards:
 

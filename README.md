@@ -95,13 +95,17 @@ go build -o thermobeacon-ble-go .
 ./thermobeacon-ble-go -device all              # decode every supported device in range
 ./thermobeacon-ble-go -no-forward              # just log readings, no UDP
 ./thermobeacon-ble-go -device AA:BB:CC:DD:EE:FF -udp-host 127.0.0.1 -udp-port 18542
+./thermobeacon-ble-go -device AA:BB:CC:DD:EE:FF,AA:BB:CC:DD:EE:02   # follow several sensors at once
 ./thermobeacon-ble-go list                     # print the seen-sensor table (sensors.json)
 ```
 
 The default `-device` is `10243784-1324-5413-b00c-9675981a8daa` (a CoreBluetooth
 peripheral UUID). On macOS devices have no MAC address — they are identified by such an
 UUID, which is stable for a given sensor on a given Mac. Find yours with
-`./thermobeacon-ble-go dump`. On Linux pass the MAC address instead.
+`./thermobeacon-ble-go dump`. On Linux pass the MAC address instead. To follow
+several sensors, give a comma-separated list (`-device AA:BB:CC:DD:EE:FF,11:22:33:44:55:66`
+— macOS UUIDs and Linux MACs can be mixed); each sensor is still rate-limited
+independently by `-min-interval`.
 
 ### Subcommands
 
@@ -116,7 +120,7 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `-device` | `10243784-...-9675981a8daa` | UUID (macOS), MAC (Linux) or `all` |
+| `-device` | `10243784-...-9675981a8daa` | UUID (macOS), MAC (Linux), a comma-separated list of those, or `all` |
 | `-udp-host` / `-udp-port` | `127.0.0.1` / `18542` | dbus-ble-sensors UDP gateway socket |
 | `-no-forward` | off | decode and log only, never send UDP packets |
 | `-cli` | off | interactive TUI: browse devices, get MAC addresses, explore payloads (no forwarding) |

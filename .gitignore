@@ -11,3 +11,6 @@ sensors.json
 *.test
 *.out
 capture-*.jsonl
+
+# macOS
+.DS_Store
