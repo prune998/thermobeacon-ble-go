@@ -3,6 +3,7 @@
 package bluescan
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/godbus/dbus/v5"
@@ -30,8 +31,11 @@ func TestMakeScanResult(t *testing.T) {
 
 	r := makeScanResult(props)
 
-	if got := r.Address.String(); got != "a4:c1:38:30:88:de" {
-		t.Errorf("Address.String() = %q, want a4:c1:38:30:88:de", got)
+	// bluetooth.MAC.String() renders uppercase hex (v0.17.0: hexDigit =
+	// "0123456789ABCDEF"). The app only matches addresses case-insensitively
+	// (AcceptsDevice / NormalizeMAC), so assert the round-trip, not the case.
+	if got := r.Address.String(); !strings.EqualFold(got, "a4:c1:38:30:88:de") {
+		t.Errorf("Address.String() = %q, want a4:c1:38:30:88:de (case-insensitive)", got)
 	}
 	if r.RSSI != -52 {
 		t.Errorf("RSSI = %d, want -52", r.RSSI)
