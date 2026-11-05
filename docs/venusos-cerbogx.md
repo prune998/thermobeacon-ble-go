@@ -273,6 +273,49 @@ sed -i '/thermobeacon-ble-go/d' /data/rc.local
 rm -rf /data/drivers/thermobeacon-ble-go /var/log/thermobeacon-ble-go
 ```
 
+## Troubleshooting: high CPU
+
+The app listens to BlueZ property changes for every Bluetooth device in
+range (that is how Linux exposes advertisements to applications). In dense
+RF environments - apartment blocks, marinas - dozens of devices advertise
+several times a second, and the Cerbo's single core has to absorb all of it.
+The app already filters as early as D-Bus allows (daemon-side match rules for
+`org.bluez.Device1` only, and devices not selected with `-device` are dropped
+in the scan loop before their payload is decoded).
+
+If `top` shows the process at high CPU:
+
+1. **Check it is really the new scanner** - the log must show this line after
+   the startup banner:
+
+   ```
+   scan: BlueZ D-Bus scan on hci0 (Device1-filtered match rules, early device drop)
+   ```
+
+2. **Rule out a restart loop**: `svstat /service/thermobeacon-ble-go` must
+   show a steadily growing uptime, and the log must not repeat the startup
+   banner every few seconds.
+
+3. **Check the environment size**: `-device all -no-forward` prints what the
+   scan sees. A long stream of foreign device addresses confirms a dense
+   environment. Toggling *Settings → Integrations → Bluetooth sensors →
+   Continuous scanning* also changes the radio duty cycle for both this app
+   and `dbus-ble-sensors`.
+
+4. **Capture a CPU profile** and send it in: add `-pprof 127.0.0.1:6060` to
+   the `run` script, then:
+
+   ```sh
+   svc -t /service/thermobeacon-ble-go
+   wget -O /tmp/cpu.pb.gz "http://127.0.0.1:6060/debug/pprof/profile?seconds=15"
+   scp root@<gx>:/tmp/cpu.pb.gz .
+   scp root@<gx>:/data/drivers/thermobeacon-ble-go/bin/thermobeacon-ble-go .
+   go tool pprof -top -nodecount=25 thermobeacon-ble-go cpu.pb.gz
+   ```
+
+   The profile names the exact functions burning CPU; with it, a targeted fix
+   beats guesswork.
+
 Sensors stay in Victron's Bluetooth sensors list until they time out
 (30 minutes after their last packet).
 

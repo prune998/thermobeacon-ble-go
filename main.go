@@ -14,6 +14,8 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"time"
 
@@ -60,6 +62,8 @@ func main() {
 		"record of seen sensors ('' disables it); 'thermobeacon-ble-go list' prints it")
 	flag.BoolVar(&cfg.Debug, "debug", false,
 		"log every advertisement and dump its payload in a meaningful way")
+	flag.StringVar(&cfg.PProfAddr, "pprof", "",
+		"serve Go pprof profiles on this address (e.g. -pprof 127.0.0.1:6060) for CPU and memory profiling")
 	flag.BoolVar(&showVer, "version", false, "print the version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `thermobeacon-ble-go - ThermoBeacon / Govee / BTHome -> Victron dbus-ble-sensors bridge
@@ -81,6 +85,15 @@ Flags:
 	flag.Parse()
 
 	logging.SetDebug(cfg.Debug)
+
+	if cfg.PProfAddr != "" {
+		go func() {
+			log.Printf("pprof: serving on http://%s/debug/pprof", cfg.PProfAddr)
+			if err := http.ListenAndServe(cfg.PProfAddr, nil); err != nil {
+				log.Printf("pprof server: %v", err)
+			}
+		}()
+	}
 
 	if showVer {
 		fmt.Println("thermobeacon-ble-go", version)

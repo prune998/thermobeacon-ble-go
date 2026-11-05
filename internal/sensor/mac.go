@@ -18,42 +18,67 @@ func IsMACAddress(s string) bool {
 
 // NormalizeMAC canonicalizes a MAC address to lowercase colon notation.
 // Accepts "DB:5C:8D:A0:0F:21", "db5c8da00f21" and "db-5c-8d-a0-0f-21".
+//
+// Called once per advertisement from every device in range (the device
+// filter), so it avoids any avoidable allocation: no strings.NewReplacer
+// (its trie construction dominates the cost) and no per-byte fmt.Sprintf.
 func NormalizeMAC(mac string) (string, error) {
 	clean := strings.ToLower(strings.TrimSpace(mac))
-	clean = strings.NewReplacer(":", "", "-", "").Replace(clean)
-	if len(clean) != 12 {
-		return "", fmt.Errorf("invalid MAC address %q", mac)
-	}
-	for _, c := range clean {
-		if !strings.ContainsRune("0123456789abcdef", c) {
+
+	var sb strings.Builder
+	sb.Grow(17)
+	for i := 0; i < len(clean); i++ {
+		c := clean[i]
+		switch c {
+		case ':', '-':
+			continue
+		case '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f':
+			if n := sb.Len(); n%3 == 2 && n > 0 {
+				sb.WriteByte(':')
+			}
+			sb.WriteByte(c)
+		default:
 			return "", fmt.Errorf("invalid MAC address %q", mac)
 		}
 	}
-	var sb strings.Builder
-	for i := 0; i < 12; i += 2 {
-		if i > 0 {
-			sb.WriteByte(':')
-		}
-		sb.WriteString(clean[i : i+2])
+	out := sb.String()
+	if len(out) != 17 {
+		return "", fmt.Errorf("invalid MAC address %q", mac)
 	}
-	return sb.String(), nil
+	return out, nil
+}
+
+// hexDigits is the lookup table for two-digit hex formatting.
+const hexDigits = "0123456789abcdef"
+
+// appendMAC appends len(b) address bytes as "aa:bb:cc:..." to out, using
+// whatever is already in out to place the separators.
+func appendMAC(out []byte, b []byte) []byte {
+	for _, c := range b {
+		if len(out) > 0 {
+			out = append(out, ':')
+		}
+		out = append(out, hexDigits[c>>4], hexDigits[c&0x0f])
+	}
+	return out
 }
 
 // MACFromLSBFirst formats 6 address bytes that are transmitted least
 // significant byte first (as the ThermoBeacon embeds its MAC) as
 // "aa:bb:cc:dd:ee:ff".
 func MACFromLSBFirst(b []byte) string {
-	return MACFromMSBFirst(reversed(b))
+	out := make([]byte, 0, len(b)*3)
+	for i := len(b) - 1; i >= 0; i-- {
+		out = appendMAC(out, b[i:i+1])
+	}
+	return string(out)
 }
 
 // MACFromMSBFirst formats 6 address bytes in network order as
 // "aa:bb:cc:dd:ee:ff".
 func MACFromMSBFirst(b []byte) string {
-	parts := make([]string, len(b))
-	for i, c := range b {
-		parts[i] = fmt.Sprintf("%02x", c)
-	}
-	return strings.Join(parts, ":")
+	out := make([]byte, 0, len(b)*3)
+	return string(appendMAC(out, b))
 }
 
 // MACToBytes parses a MAC address into 6 bytes in network order.
@@ -119,14 +144,6 @@ func IdentityFor(senderMAC, addr string) string {
 		return senderMAC
 	}
 	return PseudoMAC(addr)
-}
-
-func reversed(b []byte) []byte {
-	out := make([]byte, len(b))
-	for i, c := range b {
-		out[len(b)-1-i] = c
-	}
-	return out
 }
 
 func Clamp(v, lo, hi float64) float64 {

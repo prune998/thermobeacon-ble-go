@@ -1,6 +1,7 @@
 # binary
 thermobeacon-ble-go
 dist/
+build/
 
 # runtime state
 sensors.json

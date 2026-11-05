@@ -126,6 +126,7 @@ UUID, which is stable for a given sensor on a given Mac. Find yours with
 | `-idle-warning` | `2m` | warn when no BLE advertisement at all was seen for N seconds |
 | `-state` | `sensors.json` | seen-sensor record (`''` disables; read by `list`) |
 | `-debug` | off | log every advertisement and dump its payload in a meaningful way |
+| `-pprof` | off | serve Go pprof profiles on this address (e.g. `-pprof 127.0.0.1:6060`) for CPU/memory profiling |
 
 ### Interactive CLI (`--cli`)
 

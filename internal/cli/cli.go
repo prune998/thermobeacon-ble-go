@@ -20,6 +20,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/prune998/thermobeacon-ble-go/internal/bluescan"
 	"github.com/prune998/thermobeacon-ble-go/internal/capture"
 	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
 	"github.com/prune998/thermobeacon-ble-go/internal/dump"
@@ -224,7 +225,7 @@ func Run(refresh time.Duration) error {
 	go func() {
 		_, err := p.Run()
 		m.closeCapture()
-		adapter.StopScan()
+		bluescan.StopScan(adapter)
 		progDone <- err
 	}()
 
@@ -235,8 +236,9 @@ func Run(refresh time.Duration) error {
 		}
 	}()
 
-	// Blocking scan: never stop the BLE callback thread (drop instead).
-	err := adapter.Scan(func(_ *bluetooth.Adapter, d bluetooth.ScanResult) {
+	// Blocking scan: never stop the BLE callback thread (drop instead). No
+	// accept hook: the TUI browses every device in range.
+	err := bluescan.Scan(adapter, nil, func(_ *bluetooth.Adapter, d bluetooth.ScanResult) {
 		select {
 		case ch <- d:
 		default:

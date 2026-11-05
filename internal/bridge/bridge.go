@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prune998/thermobeacon-ble-go/internal/bluescan"
 	"github.com/prune998/thermobeacon-ble-go/internal/capture"
 	"github.com/prune998/thermobeacon-ble-go/internal/config"
 	"github.com/prune998/thermobeacon-ble-go/internal/decoders"
@@ -99,7 +100,7 @@ func Run(cfg *config.Config, st *store.SeenStore) error {
 	go func() {
 		<-ctx.Done()
 		log.Print("shutting down...")
-		_ = adapter.StopScan()
+		_ = bluescan.StopScan(adapter)
 		time.Sleep(500 * time.Millisecond) // give the scan a moment to stop
 		st.Flush()
 		os.Exit(0)
@@ -107,8 +108,10 @@ func Run(cfg *config.Config, st *store.SeenStore) error {
 
 	go b.WatchIdle(ctx)
 
-	// Scan blocks until StopScan is called.
-	if err := adapter.Scan(b.HandleScan); err != nil {
+	// Scan blocks until StopScan is called. The device filter is hoisted
+	// into the scan loop (bluescan) so advertisements from other devices are
+	// dropped before a ScanResult is built for them.
+	if err := bluescan.Scan(adapter, b.cfg.AcceptsDevice, b.HandleScan); err != nil {
 		return fmt.Errorf("scan: %w", err)
 	}
 	st.Flush()
@@ -151,13 +154,18 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 
 	senderMAC := sensor.SenderMAC(addr)
 
+	// Payload accessors are cheap getters, but the loop calls them several
+	// times per advertisement: read them once.
+	mfgData := device.ManufacturerData()
+	localName := device.LocalName()
+
 	// Govee devices fill most broadcasts with the INTELLI_ROCKS blob; the
 	// measurement frame only arrives when its values change. Explain that
 	// once per device, and keep the dump quiet about repeat blobs.
 	appleKnown := false
-	for _, mfg := range device.ManufacturerData() {
+	for _, mfg := range mfgData {
 		if mfg.CompanyID == decoders.CompanyIDApple {
-			appleKnown = b.noteAppleBlob(addr, device.LocalName())
+			appleKnown = b.noteAppleBlob(addr, localName)
 			break
 		}
 	}
@@ -168,7 +176,7 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 
 	// 1. Manufacturer data formats: ThermoBeacon first (its 18 byte signature
 	//    with the embedded MAC), then Govee thermometers (H5074 and friends).
-	for _, mfg := range device.ManufacturerData() {
+	for _, mfg := range mfgData {
 		if mfg.CompanyID == decoders.CompanyIDApple {
 			// Apple's company id: the INTELLI_ROCKS blob some Govee
 			// firmwares emit next to their own data - never a measurement.
@@ -179,7 +187,7 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 			b.forward(reading, device.RSSI, now)
 			return
 		}
-		reading, govErr := decoders.Govee(sensor.IdentityFor(senderMAC, addr), device.LocalName(), mfg.CompanyID, mfg.Data)
+		reading, govErr := decoders.Govee(sensor.IdentityFor(senderMAC, addr), localName, mfg.CompanyID, mfg.Data)
 		if govErr == nil {
 			b.forward(reading, device.RSSI, now)
 			return
@@ -187,7 +195,7 @@ func (b *Bridge) HandleScan(adapter *bluetooth.Adapter, device bluetooth.ScanRes
 		// A Govee-named device whose frame cannot be decoded is logged once
 		// at INFO level with the raw bytes, so unknown frame formats can be
 		// identified (and supported) from the log alone.
-		b.logUnknownGoveeOnce(addr, device.LocalName(), mfg.CompanyID, mfg.Data, govErr)
+		b.logUnknownGoveeOnce(addr, localName, mfg.CompanyID, mfg.Data, govErr)
 		logging.Debugf("%s manufacturer data 0x%04x (%d bytes): %v; %v",
 			addr, mfg.CompanyID, len(mfg.Data), tbErr, govErr)
 	}

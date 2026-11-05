@@ -4,6 +4,7 @@ package config
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/prune998/thermobeacon-ble-go/internal/sensor"
@@ -31,10 +32,22 @@ type Config struct {
 	MinInterval time.Duration
 	IdleWarning time.Duration
 	Debug       bool
+	PProfAddr   string // serve Go pprof profiles on this address ("" = off)
+
+	// deviceMAC caches Device in normalized MAC form ("" when Device is not
+	// a MAC address). Computed at most once: AcceptsDevice runs for every
+	// advertisement from every device in range and must not re-derive the
+	// filter (or allocate an error) per advertisement.
+	deviceMAC     string
+	deviceMACOnce sync.Once
 }
 
 // AcceptsDevice reports whether an advertisement from the given address
 // (as returned by ScanResult.Address.String()) should be decoded.
+//
+// This runs on the scan callback for every advertisement in range, so the
+// reject path (the overwhelmingly common case with a single-device filter)
+// must stay allocation-free.
 func (c *Config) AcceptsDevice(addr string) bool {
 	if c.Device == "" || c.Device == "all" || c.Device == "*" {
 		return true
@@ -43,13 +56,17 @@ func (c *Config) AcceptsDevice(addr string) bool {
 		return true
 	}
 	// Compare as MAC addresses so "db5c8da00f21", "DB:5C:8D:A0:0F:21" and
-	// "db-5c-8d-a0-0f-21" all match the same sensor.
-	if n, err := sensor.NormalizeMAC(addr); err == nil {
-		if d, err := sensor.NormalizeMAC(c.Device); err == nil && n == d {
-			return true
-		}
+	// "db-5c-8d-a0-0f-21" all match the same sensor. The filter is
+	// normalized once; a non-MAC filter (e.g. a macOS UUID) is fully covered
+	// by the EqualFold above, so there is nothing left to try.
+	c.deviceMACOnce.Do(func() {
+		c.deviceMAC, _ = sensor.NormalizeMAC(c.Device)
+	})
+	if c.deviceMAC == "" {
+		return false
 	}
-	return false
+	n, err := sensor.NormalizeMAC(addr)
+	return err == nil && n == c.deviceMAC
 }
 
 // DescribeDevice renders the device filter for log lines.
